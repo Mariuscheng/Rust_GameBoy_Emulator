@@ -103,8 +103,8 @@ mod cpu {
         fn handle_interrupt(&mut self, addr: u16, flag: u8) {
             self.ime = false;
             self.registers.sp = self.registers.sp.wrapping_sub(2);
-            self.write_byte(self.registers.sp + 1, (self.registers.pc >> 8) as u8);
             self.write_byte(self.registers.sp, self.registers.pc as u8);
+            self.write_byte(self.registers.sp + 1, (self.registers.pc >> 8) as u8);
             self.registers.pc = addr;
             self.write_byte(0xFF0F, self.read_byte(0xFF0F) & !flag);
         }
