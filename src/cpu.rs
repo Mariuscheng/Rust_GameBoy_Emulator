@@ -1,5 +1,11 @@
 // filepath: c:\Users\mariu\Desktop\Rust\gameboy_emulator\src\cpu.rs
 use crate::mmu::MMU;
+use std::collections::HashSet;
+use std::sync::Mutex;
+
+lazy_static::lazy_static! {
+    pub static ref UNIMPL_OPCODES: Mutex<HashSet<u8>> = Mutex::new(HashSet::new());
+}
 
 #[allow(dead_code)]
 pub struct Registers {
@@ -435,8 +441,200 @@ impl CPU {
                 let n = self.fetch();
                 self.mmu.write_byte(hl, n);
             }
-            // ...繼續補齊其他常用指令...
-            _ => println!("未實作的指令: 0x{:02X} 在 PC: 0x{:04X}", opcode, self.registers.pc),
+            // 0x2F: CPL (A 取反)
+            0x2F => { self.registers.a = !self.registers.a; }
+            // 0x30: JR NC, n (這裡簡化為無條件跳轉)
+            0x30 => {
+                let offset = self.fetch() as i8;
+                self.registers.pc = (self.registers.pc as i16 + offset as i16) as u16;
+            }
+            // 0x37: SCF (設置進位旗標，這裡僅示意)
+            0x37 => { /* self.registers.f |= 0x10; */ }
+            // 0x38: JR C, n (這裡簡化為無條件跳轉)
+            0x38 => {
+                let offset = self.fetch() as i8;
+                self.registers.pc = (self.registers.pc as i16 + offset as i16) as u16;
+            }
+            // 0x39: ADD HL, SP
+            0x39 => {
+                let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
+                let result = hl.wrapping_add(self.registers.sp);
+                self.registers.h = (result >> 8) as u8;
+                self.registers.l = result as u8;
+            }
+            // 0x3A: LD A, (HL-)
+            0x3A => {
+                let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
+                self.registers.a = self.mmu.read_byte(hl);
+                let hl = hl.wrapping_sub(1);
+                self.registers.h = (hl >> 8) as u8;
+                self.registers.l = hl as u8;
+            }
+            // 0x3F: CCF (反轉進位旗標，這裡僅示意)
+            0x3F => { /* self.registers.f ^= 0x10; */ }
+            // 0x88~0x8F: ADC A, r（這裡暫以普通加法代替，未處理進位）
+            0x88 => { self.registers.a = self.registers.a.wrapping_add(self.registers.b); }
+            0x89 => { self.registers.a = self.registers.a.wrapping_add(self.registers.c); }
+            0x8A => { self.registers.a = self.registers.a.wrapping_add(self.registers.d); }
+            0x8B => { self.registers.a = self.registers.a.wrapping_add(self.registers.e); }
+            0x8C => { self.registers.a = self.registers.a.wrapping_add(self.registers.h); }
+            0x8D => { self.registers.a = self.registers.a.wrapping_add(self.registers.l); }
+            0x8E => {
+                let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
+                self.registers.a = self.registers.a.wrapping_add(self.mmu.read_byte(hl));
+            }
+            0x8F => { self.registers.a = self.registers.a.wrapping_add(self.registers.a); } // ADD A, A
+                        // 0x98~0x9F: SBC A, r（這裡暫以普通減法代替，未處理進位）
+            0x98 => { self.registers.a = self.registers.a.wrapping_sub(self.registers.b); }
+            0x99 => { self.registers.a = self.registers.a.wrapping_sub(self.registers.c); }
+            0x9A => { self.registers.a = self.registers.a.wrapping_sub(self.registers.d); }
+            0x9B => { self.registers.a = self.registers.a.wrapping_sub(self.registers.e); }
+            0x9C => { self.registers.a = self.registers.a.wrapping_sub(self.registers.h); }
+            0x9D => { self.registers.a = self.registers.a.wrapping_sub(self.registers.l); }
+            0x9E => {
+                let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
+                self.registers.a = self.registers.a.wrapping_sub(self.mmu.read_byte(hl));
+            }
+            0x9F => { self.registers.a = self.registers.a.wrapping_sub(self.registers.a); }
+            // 0xC3: JP nn 已補
+            // 0xC9: RET 已補
+            // 0xCB: CB 前綴指令
+            0xCB => {
+                let cb_opcode = self.fetch();
+                self.decode_cb(cb_opcode);
+            }
+            0x10 => { /* STOP (暫不處理) */ }
+            0x27 => { /* DAA (十進制調整，暫不處理) */ }
+            0xC0 => { /* RET NZ (暫不處理條件與堆疊) */ }
+            0xC1 => { /* POP BC (暫不處理堆疊) */ }
+            0xCB => {
+                let cb_opcode = self.fetch();
+                self.decode_cb(cb_opcode);
+            }
+            0xC2 => { // JP NZ, nn (簡化:無條件跳轉)
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                self.registers.pc = (hi << 8) | lo;
+            }
+            0xC4 => { // CALL NZ, nn (簡化:無條件跳轉)
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                self.registers.pc = (hi << 8) | lo;
+            }
+            0xC5 => { /* PUSH BC (暫不處理堆疊) */ }
+            0xC6 => { let n = self.fetch(); self.registers.a = self.registers.a.wrapping_add(n); } // ADD A, n
+            0xC7 => { /* RST 00H (暫不處理) */ }
+            0xC8 => { /* RET Z (暫不處理) */ }
+            0xCA => { // JP Z, nn (簡化:無條件跳轉)
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                self.registers.pc = (hi << 8) | lo;
+            }
+            0xCC => { // CALL Z, nn (簡化:無條件跳轉)
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                self.registers.pc = (hi << 8) | lo;
+            }
+            0xCD => { // CALL nn (簡化:無條件跳轉)
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                self.registers.pc = (hi << 8) | lo;
+            }
+            0xCE => { let n = self.fetch(); self.registers.a = self.registers.a.wrapping_add(n); } // ADC A, n (暫以普通加法)
+            0xCF => { /* RST 08H (暫不處理) */ }
+            0xD0 => { /* RET NC (暫不處理) */ }
+            0xD1 => { /* POP DE (暫不處理堆疊) */ }
+            0xD2 => { // JP NC, nn (簡化:無條件跳轉)
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                self.registers.pc = (hi << 8) | lo;
+            }
+            0xD3 => { /* 未使用 */ }
+            0xD4 => { // CALL NC, nn (簡化:無條件跳轉)
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                self.registers.pc = (hi << 8) | lo;
+            }
+            0xD5 => { /* PUSH DE (暫不處理堆疊) */ }
+            0xD6 => { let n = self.fetch(); self.registers.a = self.registers.a.wrapping_sub(n); } // SUB n
+            0xD7 => { /* RST 10H (暫不處理) */ }
+            0xD8 => { /* RET C (暫不處理) */ }
+            0xD9 => { /* RETI (暫不處理) */ }
+            0xDA => { // JP C, nn (簡化:無條件跳轉)
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                self.registers.pc = (hi << 8) | lo;
+            }
+            0xDB => { /* 未使用 */ }
+            0xDC => { // CALL C, nn (簡化:無條件跳轉)
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                self.registers.pc = (hi << 8) | lo;
+            }
+            0xDD => { /* 未使用 */ }
+            0xDE => { let n = self.fetch(); self.registers.a = self.registers.a.wrapping_sub(n); } // SBC A, n (暫以普通減法)
+            0xDF => { /* RST 18H (暫不處理) */ }
+            0xE0 => { let n = self.fetch(); self.mmu.write_byte(0xFF00 + n as u16, self.registers.a); } // LDH (n),A
+            0xE1 => { /* POP HL (暫不處理堆疊) */ }
+            0xE2 => { self.mmu.write_byte(0xFF00 + self.registers.c as u16, self.registers.a); } // LD (C),A
+            0xE3 => { /* 未使用 */ }
+            0xE4 => { /* 未使用 */ }
+            0xE5 => { /* PUSH HL (暫不處理堆疊) */ }
+            0xE6 => { let n = self.fetch(); self.registers.a &= n; } // AND n
+            0xE7 => { /* RST 20H (暫不處理) */ }
+            0xE8 => { let n = self.fetch() as i8; self.registers.sp = (self.registers.sp as i16 + n as i16) as u16; } // ADD SP, n
+            0xE9 => { // JP (HL)
+                let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
+                self.registers.pc = hl;
+            }
+            0xEA => { // LD (nn),A
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                let addr = (hi << 8) | lo;
+                self.mmu.write_byte(addr, self.registers.a);
+            }
+            0xEB => { /* 未使用 */ }
+            0xEC => { /* 未使用 */ }
+            0xED => { /* 未使用 */ }
+            0xEE => { let n = self.fetch(); self.registers.a ^= n; } // XOR n
+            0xEF => { /* RST 28H (暫不處理) */ }
+            0xF0 => { let n = self.fetch(); self.registers.a = self.mmu.read_byte(0xFF00 + n as u16); } // LDH A,(n)
+            0xF1 => { /* POP AF (暫不處理堆疊) */ }
+            0xF2 => { self.registers.a = self.mmu.read_byte(0xFF00 + self.registers.c as u16); } // LD A,(C)
+            0xF3 => { /* DI (暫不處理中斷) */ }
+            0xF4 => { /* 未使用 */ }
+            0xF5 => { /* PUSH AF (暫不處理堆疊) */ }
+            0xF6 => { let n = self.fetch(); self.registers.a |= n; } // OR n
+            0xF7 => { /* RST 30H (暫不處理) */ }
+            0xF8 => { let n = self.fetch() as i8; let hl = (self.registers.sp as i16 + n as i16) as u16; self.registers.h = (hl >> 8) as u8; self.registers.l = hl as u8; } // LD HL,SP+n
+            0xF9 => { // LD SP,HL
+                let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
+                self.registers.sp = hl;
+            }
+            0xFA => { // LD A,(nn)
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                let addr = (hi << 8) | lo;
+                self.registers.a = self.mmu.read_byte(addr);
+            }
+            0xFB => { /* EI (暫不處理中斷) */ }
+            0xFC => { /* 未使用 */ }
+            0xFD => { /* 未使用 */ }
+            0xFE => { let n = self.fetch(); let _ = self.registers.a.wrapping_sub(n); } // CP n
+            0xFF => { /* RST 38H (暫不處理) */ }
+            0x08 => { // LD (nn),SP
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                let addr = (hi << 8) | lo;
+                self.mmu.write_byte(addr, (self.registers.sp & 0xFF) as u8);
+                self.mmu.write_byte(addr + 1, (self.registers.sp >> 8) as u8);
+            }
+            _ => {
+                let mut set = UNIMPL_OPCODES.lock().unwrap();
+                if set.insert(opcode) {
+                    println!("未實作的指令: 0x{:02X} 在 PC: 0x{:04X}", opcode, self.registers.pc);
+                }
+            }
         }
     }
 
@@ -444,8 +642,14 @@ impl CPU {
         match cb_opcode {
             0x11 => { /* RL C */ }
             0x7C => { /* BIT 7, H */ }
-            // ...補齊 CB 指令...
-            _ => unimplemented!("CB Opcode {:#X} not implemented", cb_opcode),
+            0xFF => { /* 這裡寫 CB FF 的行為，暫時可留空 */ }
+            // ...已實作的CB指令...
+            _ => {
+                let mut set = UNIMPL_OPCODES.lock().unwrap();
+                if set.insert(cb_opcode) {
+                    println!("未實作的 CB 指令: 0xCB{:02X} 在 PC: 0x{:04X}", cb_opcode, self.registers.pc);
+                }
+            }
         }
     }
 }
