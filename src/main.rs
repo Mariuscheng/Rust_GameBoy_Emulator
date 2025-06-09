@@ -10,10 +10,13 @@ use crate::cpu::CPU;
 mod ppu;
 use crate::ppu::PPU;
 mod apu;
+use crate::apu::APU;
 mod joypad;
+use crate::joypad::{GameBoyKey, Joypad};
 mod test_runner;
 mod timer;
 use crate::test_runner::run_test_simulation;
+use crate::timer::Timer;
 
 fn main() {
     println!("Game Boy 模擬器啟動中...");
@@ -32,12 +35,18 @@ fn main() {
             println!("測試結果已保存到 test_result.txt");
         }
         return;
-    }
-
-    // 正常模式：創建 MMU 和 CPU
+    } // 正常模式：創建 MMU 和 CPU
     let mmu = MMU::new();
     let mut cpu = CPU::new(mmu);
     let mut ppu = PPU::new();
+    let mut apu = APU::new();
+    let mut joypad = Joypad::new();
+    let mut timer = Timer::new();
+
+    // 啟用調試模式
+    joypad.set_debug_mode(true);
+    apu.set_debug_mode(true);
+
     println!("系統組件初始化完成");
 
     // 載入實際 ROM 檔案
@@ -70,6 +79,18 @@ fn main() {
             cpu.step();
             cycle_count += 4; // 假設每條指令需要4個時鐘週期
 
+            // 更新定時器，檢查中斷
+            if timer.step(4) {
+                let mut if_reg = cpu.mmu.read_byte(0xFF0F);
+                if_reg |= 0x04; // Timer 中斷
+                cpu.mmu.write_byte(0xFF0F, if_reg);
+            }
+
+            // 步進 APU 和 MMU
+            apu.step();
+            cpu.mmu.step();
+            cpu.mmu.step_apu();
+
             // 模擬 LCD 掃描線（LY 暫存器）
             // Game Boy LCD 的掃描線週期約為456個時鐘週期
             if cycle_count >= 456 {
@@ -86,6 +107,66 @@ fn main() {
                     cpu.mmu.write_byte(0xFF0F, if_reg);
                 }
             }
+        }
+
+        // 處理鍵盤輸入
+        if window.is_key_down(Key::Right) {
+            joypad.key_down(GameBoyKey::Right);
+        }
+        if window.is_key_down(Key::Left) {
+            joypad.key_down(GameBoyKey::Left);
+        }
+        if window.is_key_down(Key::Up) {
+            joypad.key_down(GameBoyKey::Up);
+        }
+        if window.is_key_down(Key::Down) {
+            joypad.key_down(GameBoyKey::Down);
+        }
+        if window.is_key_down(Key::Z) {
+            joypad.key_down(GameBoyKey::A);
+        }
+        if window.is_key_down(Key::X) {
+            joypad.key_down(GameBoyKey::B);
+        }
+        if window.is_key_down(Key::Enter) {
+            joypad.key_down(GameBoyKey::Start);
+        }
+        if window.is_key_down(Key::Space) {
+            joypad.key_down(GameBoyKey::Select);
+        }
+
+        // 檢查按鍵釋放
+        if !window.is_key_down(Key::Right) {
+            joypad.key_up(GameBoyKey::Right);
+        }
+        if !window.is_key_down(Key::Left) {
+            joypad.key_up(GameBoyKey::Left);
+        }
+        if !window.is_key_down(Key::Up) {
+            joypad.key_up(GameBoyKey::Up);
+        }
+        if !window.is_key_down(Key::Down) {
+            joypad.key_up(GameBoyKey::Down);
+        }
+        if !window.is_key_down(Key::Z) {
+            joypad.key_up(GameBoyKey::A);
+        }
+        if !window.is_key_down(Key::X) {
+            joypad.key_up(GameBoyKey::B);
+        }
+        if !window.is_key_down(Key::Enter) {
+            joypad.key_up(GameBoyKey::Start);
+        }
+        if !window.is_key_down(Key::Space) {
+            joypad.key_up(GameBoyKey::Select);
+        } // 將手柄狀態寫入MMU
+        cpu.mmu.set_joypad(joypad.get_joypad_state());
+
+        // 檢查手柄中斷
+        if joypad.has_key_pressed() {
+            let mut if_reg = cpu.mmu.read_byte(0xFF0F);
+            if_reg |= 0x10; // Joypad 中斷
+            cpu.mmu.write_byte(0xFF0F, if_reg);
         }
 
         // 模擬硬體狀態更新
@@ -203,16 +284,31 @@ fn main() {
             }
             println!(); // 每 10000 幀進行一次詳細的 VRAM 分析
             if frame_count % 10000 == 0 {
-                println!("======== 詳細 VRAM 分析 (幀數: {}) ========", frame_count);
-
-                // 測試新的簡單方法
+                println!("======== 詳細 VRAM 分析 (幀數: {}) ========", frame_count); // 測試新的簡單方法
                 println!("簡單測試方法結果: {}", cpu.mmu.test_simple_method());
                 println!("簡單版本: {}", cpu.mmu.simple_version());
+                println!("MMU 版本: {}", cpu.mmu.get_mmu_version());
+                println!("測試方法結果: {}", cpu.mmu.test_method()); // 顯示MMU調試字段信息
+                cpu.mmu.debug_fields();
+
+                // 測試 VRAM 讀寫功能
+                let test_vram_value = cpu.mmu.read_vram(0x8000);
+                cpu.mmu.write_vram(0x8000, test_vram_value.wrapping_add(1));
+                println!("VRAM 測試: 讀取 0x8000 = 0x{:02X}", test_vram_value);
+
+                // 獲取 APU 實例進行額外測試
+                let _apu_ref = cpu.mmu.get_apu();
 
                 // 重新啟用詳細 VRAM 分析
                 let vram_analysis = cpu.mmu.analyze_vram_content();
                 println!("{}", vram_analysis);
                 cpu.mmu.save_vram_analysis();
+
+                // 生成並顯示手柄狀態報告
+                println!("{}", joypad.generate_status_report());
+
+                // 生成並顯示APU狀態報告
+                println!("{}", apu.generate_status_report());
             }
 
             // 檢查背景 tile map 前幾個字節
@@ -227,11 +323,13 @@ fn main() {
             // 檢查是否在等待循環中
             if cpu.is_in_wait_loop() {
                 println!("檢測到等待循環 - 這是正常的Game Boy行為");
-            }
-
-            // 每 50000 幀保存性能報告
+            } // 每 50000 幀保存性能報告
             if frame_count % 50000 == 0 {
                 cpu.save_performance_report();
+
+                // 重置手柄狀態（模擬長時間運行後的狀態重置）
+                joypad.reset();
+                println!("手柄狀態已重置");
             }
         }
     }
@@ -256,10 +354,12 @@ fn main() {
         instruction_count as f64 / total_time.as_secs_f64()
     );
     println!("\n最終 CPU 狀態:");
-    println!("{}", cpu.get_enhanced_status_report());
-
-    // 保存最終性能報告
+    println!("{}", cpu.get_enhanced_status_report()); // 保存最終性能報告
     cpu.save_performance_report();
+
+    // 保存最終 APU 和手柄報告
+    apu.save_final_report();
+    joypad.save_final_report();
 
     println!("\nGame Boy 模擬器結束");
 }

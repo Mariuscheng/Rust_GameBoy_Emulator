@@ -113,9 +113,7 @@ impl Joypad {
         }
 
         result
-    }
-
-    // 寫入手柄控制寄存器
+    } // 寫入手柄控制寄存器
     pub fn write_joypad_register(&mut self, value: u8) {
         self.select_direction = (value & 0x10) == 0;
         self.select_action = (value & 0x20) == 0;
@@ -123,6 +121,13 @@ impl Joypad {
         if self.debug_enabled {
             self.log_register_access(value);
         }
+    }
+
+    // 獲取當前手柄狀態（用於與MMU交互）
+    pub fn get_joypad_state(&self) -> u8 {
+        // 返回組合的手柄狀態
+        // 高4位為方向鍵，低4位為動作鍵
+        (self.direction_keys << 4) | self.action_keys
     }
 
     // 檢查是否有按鍵按下 (用於中斷判斷)
