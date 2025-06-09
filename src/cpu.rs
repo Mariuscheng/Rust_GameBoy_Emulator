@@ -79,9 +79,8 @@ impl CPU {
             hot_memory_threshold: 10,
         }
     }
-
     pub fn load_rom(&mut self, rom: &[u8]) {
-        self.mmu.load_rom(rom);
+        self.mmu.load_rom(rom.to_vec());
     }
 
     pub fn execute(&mut self) {

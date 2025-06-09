@@ -62,9 +62,8 @@ impl PPU {
             return;
         }
 
-        // 強制啟用背景以進行調試（忽略 LCDC bit 0）
-        // 這樣我們可以看到 VRAM 中是否有實際的圖形數據
-        let bg_enable = true; // 強制啟用背景進行調試
+        // 使用LCDC bit 0來控制背景的顯示
+        let bg_enable = (self.lcdc & 0x01) != 0;
 
         // 檢查Window是否啟用 (LCDC 第 5 位)
         let window_enable = (self.lcdc & 0x20) != 0;

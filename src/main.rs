@@ -45,14 +45,16 @@ fn main() {
     let start_time = std::time::Instant::now();
     println!("開始模擬循環...");
     while window.is_open() && !window.is_key_down(Key::Escape) {
+        // 執行 CPU 模擬步驟
         cpu.step();
 
-        // 強制確保測試數據存在（調試模式）
-        // cpu.mmu.ensure_test_data(); // 註釋掉直接調用，改用 vram() 間接調用
+        // 從 MMU 獲取 VRAM 數據，但確保不要注入測試數據
+        // 直接獲取當前狀態的 VRAM
+        let vram_data = cpu.mmu.vram();
+        ppu.vram.copy_from_slice(&vram_data);
 
-        // 同步 VRAM、OAM、palette、滾動、window
-        ppu.vram.copy_from_slice(&cpu.mmu.vram());
-        ppu.set_oam(cpu.mmu.oam().try_into().unwrap());
+        // 同步其他 PPU 相關寄存器
+        ppu.set_oam(cpu.mmu.oam());
         ppu.set_bgp(cpu.mmu.read_byte(0xFF47));
         ppu.set_obp0(cpu.mmu.read_byte(0xFF48));
         ppu.set_scx(cpu.mmu.read_byte(0xFF43));
@@ -60,7 +62,11 @@ fn main() {
         ppu.set_wx(cpu.mmu.read_byte(0xFF4B));
         ppu.set_wy(cpu.mmu.read_byte(0xFF4A));
         ppu.set_lcdc(cpu.mmu.read_byte(0xFF40)); // 設置 LCD 控制寄存器
+
+        // 執行 PPU 渲染
         ppu.step();
+
+        // 更新窗口顯示
         window
             .update_with_buffer(ppu.get_framebuffer(), 160, 144)
             .unwrap();
@@ -131,15 +137,25 @@ fn main() {
             println!("其他 PPU 寄存器:");
             println!("  BGP (背景調色板): 0x{:02X}", cpu.mmu.read_byte(0xFF47));
             println!("  SCX (背景滾動X): {}", cpu.mmu.read_byte(0xFF43));
-            println!("  SCY (背景滾動Y): {}", cpu.mmu.read_byte(0xFF42));
-
-            // 檢查 VRAM 前幾個字節是否有數據
+            println!("  SCY (背景滾動Y): {}", cpu.mmu.read_byte(0xFF42)); // 檢查 VRAM 前幾個字節是否有數據
             println!("VRAM 內容檢查:");
             print!("  前16字節: ");
             for i in 0..16 {
                 print!("{:02X} ", ppu.vram[i]);
             }
-            println!();
+            println!(); // 每 10000 幀進行一次詳細的 VRAM 分析
+            if frame_count % 10000 == 0 {
+                println!("======== 詳細 VRAM 分析 (幀數: {}) ========", frame_count);
+
+                // 測試新的簡單方法
+                println!("簡單測試方法結果: {}", cpu.mmu.test_simple_method());
+                println!("簡單版本: {}", cpu.mmu.simple_version());
+
+                // 重新啟用詳細 VRAM 分析
+                let vram_analysis = cpu.mmu.analyze_vram_content();
+                println!("{}", vram_analysis);
+                cpu.mmu.save_vram_analysis();
+            }
 
             // 檢查背景 tile map 前幾個字節
             print!("  背景 tile map 前16字節: ");
