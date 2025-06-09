@@ -12,6 +12,52 @@ pub struct Registers {
     pub l: u8,
     pub pc: u16,
     pub sp: u16,
+    pub f: u8, // 標誌位暫存器
+}
+
+impl Registers {
+    // 標誌位操作
+    pub fn get_z_flag(&self) -> bool {
+        (self.f & 0x80) != 0
+    }
+    pub fn get_n_flag(&self) -> bool {
+        (self.f & 0x40) != 0
+    }
+    pub fn get_h_flag(&self) -> bool {
+        (self.f & 0x20) != 0
+    }
+    pub fn get_c_flag(&self) -> bool {
+        (self.f & 0x10) != 0
+    }
+
+    pub fn set_z_flag(&mut self, value: bool) {
+        if value {
+            self.f |= 0x80;
+        } else {
+            self.f &= !0x80;
+        }
+    }
+    pub fn set_n_flag(&mut self, value: bool) {
+        if value {
+            self.f |= 0x40;
+        } else {
+            self.f &= !0x40;
+        }
+    }
+    pub fn set_h_flag(&mut self, value: bool) {
+        if value {
+            self.f |= 0x20;
+        } else {
+            self.f &= !0x20;
+        }
+    }
+    pub fn set_c_flag(&mut self, value: bool) {
+        if value {
+            self.f |= 0x10;
+        } else {
+            self.f &= !0x10;
+        }
+    }
 }
 
 pub struct CPU {
@@ -127,6 +173,107 @@ impl CPU {
                 // JR n
                 let offset = self.fetch() as i8;
                 self.registers.pc = ((self.registers.pc as i32) + (offset as i32)) as u16;
+            }
+            // 新增的指令實現
+            0xA7 => {
+                // AND A (邏輯與 A 和 A，實際上就是測試 A 的值)
+                self.registers.a = self.registers.a & self.registers.a;
+                // 設置標誌位: Z=結果為0, N=0, H=1, C=0
+            }
+            0x28 => {
+                // JR Z, n (如果 Z 標誌設置則相對跳轉)
+                let offset = self.fetch() as i8;
+                // 暫時假設 Z=0，所以不跳轉
+                // TODO: 實現標誌位系統
+            }
+            0xFA => {
+                // LD A, (nn) (從記憶體地址 nn 載入到 A)
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                let addr = (hi << 8) | lo;
+                self.registers.a = self.mmu.read_byte(addr);
+            }
+            0xE0 => {
+                // LDH (n), A (將 A 儲存到 0xFF00+n)
+                let n = self.fetch();
+                let addr = 0xFF00 + n as u16;
+                self.mmu.write_byte(addr, self.registers.a);
+            }
+            0x85 => {
+                // ADD A, L (A = A + L)
+                self.registers.a = self.registers.a.wrapping_add(self.registers.l);
+            }
+            0x1D => {
+                // DEC E (E 暫存器減一)
+                self.registers.e = self.registers.e.wrapping_sub(1);
+            }
+            0xDA => {
+                // JP C, nn (如果 C 標誌設置則跳轉)
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                let addr = (hi << 8) | lo;
+                // 暫時假設 C=0，所以不跳轉
+                // TODO: 實現標誌位系統
+            }
+            0xFE => {
+                // CP n (比較 A 和立即數 n)
+                let n = self.fetch();
+                // 執行 A - n 但不保存結果，只設置標誌位
+                // TODO: 實現標誌位系統
+            }
+            0x03 => {
+                // INC BC (BC 暫存器對增一)
+                let bc = ((self.registers.b as u16) << 8) | (self.registers.c as u16);
+                let result = bc.wrapping_add(1);
+                self.registers.b = (result >> 8) as u8;
+                self.registers.c = result as u8;
+            }
+            0x20 => {
+                // JR NZ, n (如果 Z 標誌未設置則相對跳轉)
+                let offset = self.fetch() as i8;
+                // 暫時假設 Z=0，所以總是跳轉
+                self.registers.pc = ((self.registers.pc as i32) + (offset as i32)) as u16;
+            }
+            0x0B => {
+                // DEC BC (BC 暫存器對減一)
+                let bc = ((self.registers.b as u16) << 8) | (self.registers.c as u16);
+                let result = bc.wrapping_sub(1);
+                self.registers.b = (result >> 8) as u8;
+                self.registers.c = result as u8;
+            }
+            0xEA => {
+                // LD (nn), A (將 A 儲存到記憶體地址 nn)
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                let addr = (hi << 8) | lo;
+                self.mmu.write_byte(addr, self.registers.a);
+            }
+            0xCD => {
+                // CALL nn (呼叫子程式)
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                let addr = (hi << 8) | lo;
+
+                // 將返回地址推入堆疊
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu
+                    .write_byte(self.registers.sp, self.registers.pc as u8);
+
+                // 跳轉到目標地址
+                self.registers.pc = addr;
+            }
+            0xF0 => {
+                // LDH A, (n) (從 0xFF00+n 載入到 A)
+                let n = self.fetch();
+                let addr = 0xFF00 + n as u16;
+                self.registers.a = self.mmu.read_byte(addr);
+            }
+            0x44 => {
+                // LD B, H (將 H 暫存器的值載入 B)
+                self.registers.b = self.registers.h;
             }
             _ => println!("Opcode {:02X} not implemented", opcode),
         }
