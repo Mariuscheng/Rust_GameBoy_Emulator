@@ -62,66 +62,52 @@ impl PPU {
             return;
         }
 
-        // 使用LCDC bit 0來控制背景的顯示
+        // 檢查背景是否啟用 (LCDC 第 0 位)
         let bg_enable = (self.lcdc & 0x01) != 0;
 
-        // 檢查Window是否啟用 (LCDC 第 5 位)
-        let window_enable = (self.lcdc & 0x20) != 0;
-
-        // 背景和 Window 渲染
+        // 如果背景關閉，顯示白屏
+        if !bg_enable {
+            for pixel in &mut self.framebuffer {
+                *pixel = 0xFFFFFFFF; // 白色
+            }
+            return;
+        } // 背景和 Window 渲染
         for y in 0..144 {
             for x in 0..160 {
-                let (tile_id, pixel_x, pixel_y) =
-                    if window_enable && y as u8 >= self.wy && x as u8 + 7 >= self.wx {
-                        // Window Layer
-                        let wx = self.wx.saturating_sub(7);
-                        let win_x = (x as i16 - wx as i16).max(0) as usize;
-                        let win_y = (y as i16 - self.wy as i16).max(0) as usize;
-                        let tile_x = win_x / 8;
-                        let tile_y = win_y / 8;
-                        let tile_map_addr = 0x1C00 + tile_y * 32 + tile_x; // window map: 0x9C00-0x9FFF
+                let mut color = 0xFFFFFFFF; // 默認白色
+
+                // 檢查Window是否啟用並且在範圍內 (LCDC 第 5 位)
+                let window_enable = (self.lcdc & 0x20) != 0;
+                let in_window = window_enable && y as u8 >= self.wy && x as u8 + 7 >= self.wx;
+
+                if in_window {
+                    // Window Layer - 使用瓦片地圖 1 ($9C00-$9FFF)
+                    let wx = self.wx.saturating_sub(7);
+                    let win_x = (x as i16 - wx as i16).max(0) as usize;
+                    let win_y = (y as i16 - self.wy as i16).max(0) as usize;
+                    let tile_x = win_x / 8;
+                    let tile_y = win_y / 8;
+
+                    if tile_x < 32 && tile_y < 32 {
+                        let tile_map_addr = 0x1C00 + tile_y * 32 + tile_x;
                         let tile_id = self.vram.get(tile_map_addr).copied().unwrap_or(0);
                         let pixel_x = win_x % 8;
                         let pixel_y = win_y % 8;
-                        (tile_id, pixel_x, pixel_y)
-                    } else if bg_enable {
-                        // 背景 Layer
-                        let scrolled_x = (x as u8).wrapping_add(self.scx) as usize % 256;
-                        let scrolled_y = (y as u8).wrapping_add(self.scy) as usize % 256;
-                        let tile_x = (scrolled_x / 8) % 32;
-                        let tile_y = (scrolled_y / 8) % 32;
-                        let tile_map_addr = (tile_y * 32 + tile_x) % 0x400; // wrap 32x32
-                        let tile_id = self.vram.get(0x1800 + tile_map_addr).copied().unwrap_or(0);
-                        let pixel_x = scrolled_x % 8;
-                        let pixel_y = scrolled_y % 8;
-                        (tile_id, pixel_x, pixel_y)
-                    } else {
-                        // 背景和Window都關閉，顯示白色（調色盤ID 0）
-                        (0, 0, 0)
-                    };
-                let color = if bg_enable || window_enable {
-                    let tile_data_addr = (tile_id as usize) * 16 + pixel_y * 2;
-                    let low_byte = self.vram.get(tile_data_addr).copied().unwrap_or(0);
-                    let high_byte = self.vram.get(tile_data_addr + 1).copied().unwrap_or(0);
-                    let bit_pos = 7 - pixel_x;
-                    let low_bit = (low_byte >> bit_pos) & 1;
-                    let high_bit = (high_byte >> bit_pos) & 1;
-                    let color_id = (high_bit << 1) | low_bit;
-
-                    // 使用強制調色板進行調試（如果 BGP 為 0x00）
-                    let palette = if self.bgp == 0x00 { 0xE4 } else { self.bgp }; // 強制使用可見的調色板
-                    let shade = (palette >> (color_id * 2)) & 0b11;
-                    match shade {
-                        0 => 0xFFFFFFFF, // 白色
-                        1 => 0xFFAAAAAA, // 淺灰
-                        2 => 0xFF555555, // 深灰
-                        3 => 0xFF000000, // 黑色
-                        _ => 0xFF00FF00, // 錯誤顏色（綠色）
+                        color = self.get_tile_pixel_color(tile_id, pixel_x, pixel_y, self.bgp);
                     }
-                } else {
-                    // 背景和Window都關閉時，顯示白色
-                    0xFFFFFFFF
-                };
+                } else if bg_enable {
+                    // 背景層 - 使用瓦片地圖 0 ($9800-$9BFF)
+                    let scrolled_x = (x as u8).wrapping_add(self.scx) as usize;
+                    let scrolled_y = (y as u8).wrapping_add(self.scy) as usize;
+                    let tile_x = (scrolled_x / 8) % 32;
+                    let tile_y = (scrolled_y / 8) % 32;
+                    let tile_map_addr = 0x1800 + tile_y * 32 + tile_x;
+                    let tile_id = self.vram.get(tile_map_addr).copied().unwrap_or(0);
+                    let pixel_x = scrolled_x % 8;
+                    let pixel_y = scrolled_y % 8;
+                    color = self.get_tile_pixel_color(tile_id, pixel_x, pixel_y, self.bgp);
+                }
+
                 let fb_idx = y * 160 + x;
                 if fb_idx < self.framebuffer.len() {
                     self.framebuffer[fb_idx] = color;
@@ -178,5 +164,39 @@ impl PPU {
     }
     pub fn get_framebuffer(&self) -> &[u32] {
         &self.framebuffer
+    }
+
+    // 獲取瓦片像素顏色的輔助方法
+    fn get_tile_pixel_color(
+        &self,
+        tile_id: u8,
+        pixel_x: usize,
+        pixel_y: usize,
+        palette: u8,
+    ) -> u32 {
+        // 瓦片數據開始於 VRAM 的 $8000 (0x0000 in vram array)
+        let tile_data_addr = (tile_id as usize) * 16 + pixel_y * 2;
+
+        if tile_data_addr + 1 >= self.vram.len() {
+            return 0xFFFFFFFF; // 如果超出範圍，返回白色
+        }
+
+        let low_byte = self.vram[tile_data_addr];
+        let high_byte = self.vram[tile_data_addr + 1];
+
+        let bit_pos = 7 - pixel_x;
+        let low_bit = (low_byte >> bit_pos) & 1;
+        let high_bit = (high_byte >> bit_pos) & 1;
+        let color_id = (high_bit << 1) | low_bit;
+
+        // 從調色板獲取實際顏色
+        let shade = (palette >> (color_id * 2)) & 0b11;
+        match shade {
+            0 => 0xFFFFFFFF, // 白色 (最亮)
+            1 => 0xFFAAAAAA, // 淺灰
+            2 => 0xFF555555, // 深灰
+            3 => 0xFF000000, // 黑色 (最暗)
+            _ => 0xFF00FF00, // 錯誤顏色（綠色）
+        }
     }
 }

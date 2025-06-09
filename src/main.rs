@@ -11,10 +11,30 @@ mod ppu;
 use crate::ppu::PPU;
 mod apu;
 mod joypad;
+mod test_runner;
 mod timer;
+use crate::test_runner::run_test_simulation;
 
 fn main() {
-    println!("Game Boy 模擬器啟動中..."); // 創建 MMU 和 CPU
+    println!("Game Boy 模擬器啟動中...");
+
+    // 檢查命令行參數是否為測試模式
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 && args[1] == "test" {
+        println!("執行測試模式...");
+        let test_result = run_test_simulation();
+        println!("{}", test_result);
+
+        // 將測試結果保存到文件
+        if let Ok(mut file) = std::fs::File::create("test_result.txt") {
+            use std::io::Write;
+            let _ = file.write_all(test_result.as_bytes());
+            println!("測試結果已保存到 test_result.txt");
+        }
+        return;
+    }
+
+    // 正常模式：創建 MMU 和 CPU
     let mmu = MMU::new();
     let mut cpu = CPU::new(mmu);
     let mut ppu = PPU::new();
@@ -38,22 +58,42 @@ fn main() {
             ];
             cpu.load_rom(&test_rom);
         }
-    }
-    // 創建窗口
+    } // 創建窗口
     let mut window = Window::new("Game Boy 模擬器", 160, 144, WindowOptions::default()).unwrap();
     let mut frame_count = 0;
     let start_time = std::time::Instant::now();
+    let mut cycle_count = 0;
     println!("開始模擬循環...");
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        // 執行 CPU 模擬步驟
-        cpu.step();
+        // 執行多個 CPU 步驟來模擬更快的時鐘速度
+        for _ in 0..1000 {
+            cpu.step();
+            cycle_count += 4; // 假設每條指令需要4個時鐘週期
 
-        // 從 MMU 獲取 VRAM 數據，但確保不要注入測試數據
-        // 直接獲取當前狀態的 VRAM
+            // 模擬 LCD 掃描線（LY 暫存器）
+            // Game Boy LCD 的掃描線週期約為456個時鐘週期
+            if cycle_count >= 456 {
+                cycle_count = 0;
+                let current_ly = cpu.mmu.read_byte(0xFF44);
+                let next_ly = if current_ly >= 153 { 0 } else { current_ly + 1 };
+                cpu.mmu.write_byte(0xFF44, next_ly);
+
+                // 在 VBlank 期間設置中斷標誌
+                if next_ly == 144 {
+                    // 進入 VBlank，設置中斷標誌
+                    let mut if_reg = cpu.mmu.read_byte(0xFF0F);
+                    if_reg |= 0x01; // VBlank 中斷
+                    cpu.mmu.write_byte(0xFF0F, if_reg);
+                }
+            }
+        }
+
+        // 模擬硬體狀態更新
+        cpu.simulate_hardware_state();
+
+        // 同步 VRAM、OAM、palette、滾動、window到PPU
         let vram_data = cpu.mmu.vram();
         ppu.vram.copy_from_slice(&vram_data);
-
-        // 同步其他 PPU 相關寄存器
         ppu.set_oam(cpu.mmu.oam());
         ppu.set_bgp(cpu.mmu.read_byte(0xFF47));
         ppu.set_obp0(cpu.mmu.read_byte(0xFF48));
@@ -61,12 +101,30 @@ fn main() {
         ppu.set_scy(cpu.mmu.read_byte(0xFF42));
         ppu.set_wx(cpu.mmu.read_byte(0xFF4B));
         ppu.set_wy(cpu.mmu.read_byte(0xFF4A));
-        ppu.set_lcdc(cpu.mmu.read_byte(0xFF40)); // 設置 LCD 控制寄存器
+        ppu.set_lcdc(cpu.mmu.read_byte(0xFF40)); // 設置 LCD 控制寄存器        ppu.step();
 
-        // 執行 PPU 渲染
-        ppu.step();
+        // 每 2000 幀輸出一次 VRAM 調試信息
+        if frame_count % 2000 == 0 {
+            let vram_non_zero_count = vram_data.iter().filter(|&&b| b != 0).count();
+            println!(
+                "VRAM 非零字節數: {} / {}",
+                vram_non_zero_count,
+                vram_data.len()
+            );
 
-        // 更新窗口顯示
+            // 檢查瓦片地圖區域
+            let tilemap_data = &vram_data[0x1800..0x1C00]; // 背景瓦片地圖
+            let tilemap_non_zero = tilemap_data.iter().filter(|&&b| b != 0).count();
+            println!("背景瓦片地圖非零字節: {} / 1024", tilemap_non_zero);
+
+            // 檢查瓦片數據區域的前 16 個瓦片
+            println!("前 16 個瓦片 ID: {:02X?}", &vram_data[0x1800..0x1810]);
+
+            // 檢查調色板
+            let bgp = cpu.mmu.read_byte(0xFF47);
+            println!("背景調色板 (BGP): 0x{:02X}", bgp);
+        }
+
         window
             .update_with_buffer(ppu.get_framebuffer(), 160, 144)
             .unwrap();
@@ -164,7 +222,12 @@ fn main() {
             }
             println!();
 
-            println!("{}", cpu.get_status_report());
+            println!("{}", cpu.get_enhanced_status_report());
+
+            // 檢查是否在等待循環中
+            if cpu.is_in_wait_loop() {
+                println!("檢測到等待循環 - 這是正常的Game Boy行為");
+            }
 
             // 每 50000 幀保存性能報告
             if frame_count % 50000 == 0 {
@@ -192,9 +255,8 @@ fn main() {
         instruction_count,
         instruction_count as f64 / total_time.as_secs_f64()
     );
-
     println!("\n最終 CPU 狀態:");
-    println!("{}", cpu.get_status_report());
+    println!("{}", cpu.get_enhanced_status_report());
 
     // 保存最終性能報告
     cpu.save_performance_report();
