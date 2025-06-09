@@ -58,8 +58,9 @@ impl CPU {
         self.execute();
         // 這裡未來會執行一條指令
         // 目前先留空
-        let pos = (self.registers.pc as usize) % 160;
-        self.mmu.vram[pos] = self.registers.pc as u8;
+        // 註釋掉這行以避免覆蓋 VRAM 測試數據
+        // let pos = (self.registers.pc as usize) % 160;
+        // self.mmu.vram[pos] = self.registers.pc as u8;
     }
     pub fn new(mmu: MMU) -> Self {
         CPU {

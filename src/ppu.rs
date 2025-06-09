@@ -1,20 +1,19 @@
 pub struct PPU {
-    pub vram: [u8; 0x2000],  // 8KB VRAM
-    framebuffer: Vec<u32>,   // 160x144 畫面
-    pub bgp: u8,             // 背景調色板
-    pub obp0: u8,            // sprite palette 0
-    pub scx: u8,             // 背景水平滾动
-    pub scy: u8,             // 背景垂直滾动
-    pub wx: u8,              // Window X
-    pub wy: u8,              // Window Y
-    pub window_enable: bool, // Window Layer 开关
-    pub oam: [u8; 160],      // 40 sprites * 4 bytes
-    pub lcdc: u8,            // LCD 控制寄存器
+    pub vram: [u8; 0x2000], // 8KB VRAM
+    framebuffer: Vec<u32>,  // 160x144 畫面
+    pub bgp: u8,            // 背景調色板
+    pub obp0: u8,           // sprite palette 0
+    pub scx: u8,            // 背景水平滾动
+    pub scy: u8,            // 背景垂直滾动
+    pub wx: u8,             // Window X
+    pub wy: u8,             // Window Y
+    pub oam: [u8; 160],     // 40 sprites * 4 bytes
+    pub lcdc: u8,           // LCD 控制寄存器
 }
 
 impl PPU {
     pub fn new() -> Self {
-        Self {
+        let ppu = Self {
             vram: [0; 0x2000],
             framebuffer: vec![0xFFFFFFFF; 160 * 144],
             bgp: 0xFC,  // 默认 palette（與MMU初始化值匹配）
@@ -23,10 +22,11 @@ impl PPU {
             scy: 0,
             wx: 0, // Game Boy 实际画面左上角（與MMU初始化值匹配）
             wy: 0,
-            window_enable: false,
             oam: [0; 160],
             lcdc: 0x91, // LCD 控制寄存器初始值（LCD 啟用，與MMU初始化值匹配）
-        }
+        };
+
+        ppu
     }
     pub fn set_bgp(&mut self, value: u8) {
         self.bgp = value;
@@ -46,9 +46,6 @@ impl PPU {
     pub fn set_wy(&mut self, value: u8) {
         self.wy = value;
     }
-    pub fn set_window_enable(&mut self, enable: bool) {
-        self.window_enable = enable;
-    }
     pub fn set_lcdc(&mut self, value: u8) {
         self.lcdc = value;
     }
@@ -63,8 +60,11 @@ impl PPU {
                 *pixel = 0xFFFFFFFF; // 白色
             }
             return;
-        } // 檢查背景是否啟用 (LCDC 第 0 位)
-        let bg_enable = (self.lcdc & 0x01) != 0;
+        }
+
+        // 強制啟用背景以進行調試（忽略 LCDC bit 0）
+        // 這樣我們可以看到 VRAM 中是否有實際的圖形數據
+        let bg_enable = true; // 強制啟用背景進行調試
 
         // 檢查Window是否啟用 (LCDC 第 5 位)
         let window_enable = (self.lcdc & 0x20) != 0;
@@ -100,7 +100,6 @@ impl PPU {
                         // 背景和Window都關閉，顯示白色（調色盤ID 0）
                         (0, 0, 0)
                     };
-
                 let color = if bg_enable || window_enable {
                     let tile_data_addr = (tile_id as usize) * 16 + pixel_y * 2;
                     let low_byte = self.vram.get(tile_data_addr).copied().unwrap_or(0);
@@ -109,7 +108,10 @@ impl PPU {
                     let low_bit = (low_byte >> bit_pos) & 1;
                     let high_bit = (high_byte >> bit_pos) & 1;
                     let color_id = (high_bit << 1) | low_bit;
-                    let shade = (self.bgp >> (color_id * 2)) & 0b11;
+
+                    // 使用強制調色板進行調試（如果 BGP 為 0x00）
+                    let palette = if self.bgp == 0x00 { 0xE4 } else { self.bgp }; // 強制使用可見的調色板
+                    let shade = (palette >> (color_id * 2)) & 0b11;
                     match shade {
                         0 => 0xFFFFFFFF, // 白色
                         1 => 0xFFAAAAAA, // 淺灰

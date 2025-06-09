@@ -46,6 +46,10 @@ fn main() {
     println!("開始模擬循環...");
     while window.is_open() && !window.is_key_down(Key::Escape) {
         cpu.step();
+
+        // 強制確保測試數據存在（調試模式）
+        // cpu.mmu.ensure_test_data(); // 註釋掉直接調用，改用 vram() 間接調用
+
         // 同步 VRAM、OAM、palette、滾動、window
         ppu.vram.copy_from_slice(&cpu.mmu.vram());
         ppu.set_oam(cpu.mmu.oam().try_into().unwrap());
@@ -60,18 +64,90 @@ fn main() {
         window
             .update_with_buffer(ppu.get_framebuffer(), 160, 144)
             .unwrap();
-        frame_count += 1; // 每 10000 幀輸出詳細狀態
-        if frame_count % 10000 == 0 {
+        frame_count += 1; // 每 1000 幀輸出詳細狀態
+        if frame_count % 1000 == 0 {
             println!("======== 幀數: {} ========", frame_count);
+            let lcdc_value = cpu.mmu.read_byte(0xFF40);
             println!(
                 "LCDC 狀態: 0x{:02X} (LCD {})",
-                cpu.mmu.read_byte(0xFF40),
-                if (cpu.mmu.read_byte(0xFF40) & 0x80) != 0 {
+                lcdc_value,
+                if (lcdc_value & 0x80) != 0 {
                     "啟用"
                 } else {
                     "關閉"
                 }
             );
+            // 詳細分析 LCDC 各個位
+            println!("LCDC 位分析:");
+            println!(
+                "  Bit 7 (LCD 啟用): {}",
+                if (lcdc_value & 0x80) != 0 {
+                    "是"
+                } else {
+                    "否"
+                }
+            );
+            println!(
+                "  Bit 6 (Window tile map): 0x{:X}000",
+                if (lcdc_value & 0x40) != 0 { 0x9C } else { 0x98 }
+            );
+            println!(
+                "  Bit 5 (Window 啟用): {}",
+                if (lcdc_value & 0x20) != 0 {
+                    "是"
+                } else {
+                    "否"
+                }
+            );
+            println!(
+                "  Bit 4 (BG & Window tile data): 0x{:X}000",
+                if (lcdc_value & 0x10) != 0 { 0x80 } else { 0x90 }
+            );
+            println!(
+                "  Bit 3 (BG tile map): 0x{:X}00",
+                if (lcdc_value & 0x08) != 0 { 0x9C } else { 0x98 }
+            );
+            println!(
+                "  Bit 2 (Sprite 大小): {}x{}",
+                8,
+                if (lcdc_value & 0x04) != 0 { 16 } else { 8 }
+            );
+            println!(
+                "  Bit 1 (Sprite 啟用): {}",
+                if (lcdc_value & 0x02) != 0 {
+                    "是"
+                } else {
+                    "否"
+                }
+            );
+            println!(
+                "  Bit 0 (背景啟用): {}",
+                if (lcdc_value & 0x01) != 0 {
+                    "是"
+                } else {
+                    "否"
+                }
+            ); // 顯示其他 PPU 寄存器
+            println!("其他 PPU 寄存器:");
+            println!("  BGP (背景調色板): 0x{:02X}", cpu.mmu.read_byte(0xFF47));
+            println!("  SCX (背景滾動X): {}", cpu.mmu.read_byte(0xFF43));
+            println!("  SCY (背景滾動Y): {}", cpu.mmu.read_byte(0xFF42));
+
+            // 檢查 VRAM 前幾個字節是否有數據
+            println!("VRAM 內容檢查:");
+            print!("  前16字節: ");
+            for i in 0..16 {
+                print!("{:02X} ", ppu.vram[i]);
+            }
+            println!();
+
+            // 檢查背景 tile map 前幾個字節
+            print!("  背景 tile map 前16字節: ");
+            for i in 0x1800..0x1810 {
+                print!("{:02X} ", ppu.vram[i]);
+            }
+            println!();
+
             println!("{}", cpu.get_status_report());
 
             // 每 50000 幀保存性能報告
