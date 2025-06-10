@@ -74,11 +74,11 @@ impl CPU {
             instruction_count: 0,
         }
     }
-
     pub fn step(&mut self) {
         self.execute();
-        let pos = (self.registers.pc as usize) % 0x2000;
-        self.mmu.vram.borrow_mut()[pos] = self.registers.pc as u8;
+        // 移除了不合理的 VRAM 寫入，因為這會破壞 VRAM 數據
+        // let pos = (self.registers.pc as usize) % 0x2000;
+        // self.mmu.vram.borrow_mut()[pos] = self.registers.pc as u8;
     }
 
     pub fn load_rom(&mut self, rom: &[u8]) {
@@ -182,7 +182,7 @@ impl CPU {
             }
             0x28 => {
                 // JR Z, n (如果 Z 標誌設置則相對跳轉)
-                let offset = self.fetch() as i8;
+                let _offset = self.fetch() as i8;
                 // 暫時假設 Z=0，所以不跳轉
                 // TODO: 實現標誌位系統
             }
@@ -211,13 +211,13 @@ impl CPU {
                 // JP C, nn (如果 C 標誌設置則跳轉)
                 let lo = self.fetch() as u16;
                 let hi = self.fetch() as u16;
-                let addr = (hi << 8) | lo;
+                let _addr = (hi << 8) | lo;
                 // 暫時假設 C=0，所以不跳轉
                 // TODO: 實現標誌位系統
             }
             0xFE => {
                 // CP n (比較 A 和立即數 n)
-                let n = self.fetch();
+                let _n = self.fetch();
                 // 執行 A - n 但不保存結果，只設置標誌位
                 // TODO: 實現標誌位系統
             }

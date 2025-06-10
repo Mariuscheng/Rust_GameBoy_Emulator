@@ -17,6 +17,8 @@ mod test_runner;
 mod timer;
 use crate::test_runner::run_test_simulation;
 use crate::timer::Timer;
+#[cfg(test)]
+mod opcode_test;
 
 fn main() {
     println!("Game Boy 模擬器啟動中...");
