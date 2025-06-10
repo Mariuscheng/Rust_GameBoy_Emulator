@@ -86,11 +86,10 @@ fn main() {
     let mut window = Window::new("Game Boy 模擬器", 160, 144, WindowOptions::default()).unwrap();
     let mut frame_count = 0;
     let start_time = std::time::Instant::now();
-    let mut cycle_count = 0;
-
-    // 根據 Fix_blank_screen.md 建議，手動寫入測試模式到 VRAM
+    let mut cycle_count = 0; // 根據 Fix_blank_screen.md 建議，手動寫入測試模式到 VRAM
     println!("💡 應用 Fix_blank_screen.md 建議 - 寫入視覺測試模式...");
-    cpu.mmu.write_test_pattern_to_vram();
+    // 直接寫入 VRAM 而不是呼叫 MMU 的方法
+    write_test_pattern_to_vram(&cpu.mmu.vram);
 
     println!("開始模擬循環...");
     while window.is_open() && !window.is_key_down(Key::Escape) {
@@ -178,7 +177,10 @@ fn main() {
         if !window.is_key_down(Key::Space) {
             joypad.key_up(GameBoyKey::Select);
         } // 將手柄狀態寫入MMU
-        cpu.mmu.set_joypad(joypad.get_joypad_state());
+        let joypad_state = joypad.get_joypad_state();
+        let direction_keys = (joypad_state >> 4) & 0x0F;
+        let action_keys = joypad_state & 0x0F;
+        cpu.mmu.set_joypad_state(direction_keys, action_keys);
 
         // 檢查手柄中斷
         if joypad.has_key_pressed() {
@@ -381,4 +383,42 @@ fn main() {
     joypad.save_final_report();
 
     println!("\nGame Boy 模擬器結束");
+}
+
+/// 手動寫入測試模式到 VRAM（根據 Fix_blank_screen.md 建議）
+fn write_test_pattern_to_vram(vram: &std::rc::Rc<std::cell::RefCell<[u8; 0x2000]>>) {
+    println!("🔧 手動寫入測試模式到 VRAM...");
+
+    // Write a simple test pattern to first tile
+    let mut vram_data = vram.borrow_mut();
+
+    // First tile: solid black (all 1s)
+    for i in 0..16 {
+        vram_data[i] = 0xFF;
+    }
+
+    // Second tile: checkerboard
+    for i in (16..32).step_by(2) {
+        vram_data[i] = 0xAA;
+        vram_data[i + 1] = 0x55;
+    }
+
+    // Third tile: horizontal stripes
+    for i in (32..48).step_by(4) {
+        vram_data[i] = 0xFF;
+        vram_data[i + 1] = 0xFF;
+        vram_data[i + 2] = 0x00;
+        vram_data[i + 3] = 0x00;
+    }
+
+    // Make first few tiles in BG map point to these test tiles
+    for i in 0..10 {
+        vram_data[0x1800 + i] = (i % 3) as u8; // 使用前3個測試瓦片
+    }
+
+    println!("🔧 測試模式寫入完成:");
+    println!("  - Tile 0: 實心黑色");
+    println!("  - Tile 1: 棋盤模式");
+    println!("  - Tile 2: 水平條紋");
+    println!("  - 背景地圖設定為循環使用這些瓦片");
 }

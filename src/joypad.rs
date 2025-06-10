@@ -62,6 +62,44 @@ impl Joypad {
         self.debug_enabled = enabled;
     }
 
+    // 更新手柄狀態 (用於與主循環同步)
+    pub fn update(&mut self) {
+        // 這個方法在每個模擬步驟中被調用
+        // 目前不需要額外的更新邏輯，但保留這個方法以便與 MMU 介面兼容
+        if self.debug_enabled {
+            // 每隔一段時間記錄手柄狀態
+            if self.key_press_count > 0 && self.key_press_count % 1000 == 0 {
+                if let Some(ref mut file) = self.debug_file {
+                    let timestamp = Local::now().format("%H:%M:%S%.3f");
+                    let log_entry = format!(
+                        "[{}] 定期手柄狀態: 方向鍵=0x{:02X}, 動作鍵=0x{:02X}\n",
+                        timestamp, self.direction_keys, self.action_keys
+                    );
+                    let _ = file.write_all(log_entry.as_bytes());
+                    let _ = file.flush();
+                }
+            }
+        }
+    }
+
+    // 更新按鈕狀態 (用於直接從 MMU 設置)
+    pub fn update_button(&mut self, direction_keys: u8, action_keys: u8) {
+        self.direction_keys = direction_keys;
+        self.action_keys = action_keys;
+
+        if self.debug_enabled {
+            if let Some(ref mut file) = self.debug_file {
+                let timestamp = Local::now().format("%H:%M:%S%.3f");
+                let log_entry = format!(
+                    "[{}] 外部更新按鈕狀態: 方向鍵=0x{:02X}, 動作鍵=0x{:02X}\n",
+                    timestamp, direction_keys, action_keys
+                );
+                let _ = file.write_all(log_entry.as_bytes());
+                let _ = file.flush();
+            }
+        }
+    }
+
     // 處理按鍵按下
     pub fn key_down(&mut self, key: GameBoyKey) {
         self.key_press_count += 1;
