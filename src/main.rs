@@ -87,6 +87,11 @@ fn main() {
     let mut frame_count = 0;
     let start_time = std::time::Instant::now();
     let mut cycle_count = 0;
+
+    // 根據 Fix_blank_screen.md 建議，手動寫入測試模式到 VRAM
+    println!("💡 應用 Fix_blank_screen.md 建議 - 寫入視覺測試模式...");
+    cpu.mmu.write_test_pattern_to_vram();
+
     println!("開始模擬循環...");
     while window.is_open() && !window.is_key_down(Key::Escape) {
         // 執行多個 CPU 步驟來模擬更快的時鐘速度
@@ -99,12 +104,10 @@ fn main() {
                 let mut if_reg = cpu.mmu.read_byte(0xFF0F);
                 if_reg |= 0x04; // Timer 中斷
                 cpu.mmu.write_byte(0xFF0F, if_reg);
-            }
-
-            // 步進 APU 和 MMU
+            } // 步進 APU 和 MMU
             apu.step();
             cpu.mmu.step();
-            cpu.mmu.step_apu();
+            // cpu.mmu.step_apu(); // 暫時註釋掉
 
             // 模擬 LCD 掃描線（LY 暫存器）
             // Game Boy LCD 的掃描線週期約為456個時鐘週期
@@ -299,25 +302,26 @@ fn main() {
             }
             println!(); // 每 10000 幀進行一次詳細的 VRAM 分析
             if frame_count % 10000 == 0 {
-                println!("======== 詳細 VRAM 分析 (幀數: {}) ========", frame_count); // 測試新的簡單方法
-                println!("簡單測試方法結果: {}", cpu.mmu.test_simple_method());
-                println!("簡單版本: {}", cpu.mmu.simple_version());
-                println!("MMU 版本: {}", cpu.mmu.get_mmu_version());
-                println!("測試方法結果: {}", cpu.mmu.test_method()); // 顯示MMU調試字段信息
-                cpu.mmu.debug_fields();
+                println!("======== 詳細 VRAM 分析 (幀數: {}) ========", frame_count);
+                // 暫時註釋掉有問題的方法調用
+                // println!("簡單測試方法結果: {}", cpu.mmu.test_simple_method());
+                // println!("簡單版本: {}", cpu.mmu.simple_version());
+                // println!("MMU 版本: {}", cpu.mmu.get_mmu_version());
+                // println!("測試方法結果: {}", cpu.mmu.test_method());
+                // cpu.mmu.debug_fields();
 
                 // 測試 VRAM 讀寫功能
-                let test_vram_value = cpu.mmu.read_vram(0x8000);
-                cpu.mmu.write_vram(0x8000, test_vram_value.wrapping_add(1));
-                println!("VRAM 測試: 讀取 0x8000 = 0x{:02X}", test_vram_value);
+                // let test_vram_value = cpu.mmu.read_vram(0x8000);
+                // cpu.mmu.write_vram(0x8000, test_vram_value.wrapping_add(1));
+                // println!("VRAM 測試: 讀取 0x8000 = 0x{:02X}", test_vram_value);
 
                 // 獲取 APU 實例進行額外測試
                 let _apu_ref = cpu.mmu.get_apu();
 
                 // 重新啟用詳細 VRAM 分析
-                let vram_analysis = cpu.mmu.analyze_vram_content();
-                println!("{}", vram_analysis);
-                cpu.mmu.save_vram_analysis();
+                // let vram_analysis = cpu.mmu.analyze_vram_content();
+                // println!("{}", vram_analysis);
+                // cpu.mmu.save_vram_analysis();
 
                 // 生成並顯示手柄狀態報告
                 println!("{}", joypad.generate_status_report());
