@@ -13,11 +13,13 @@ mod apu;
 use crate::apu::APU;
 mod joypad;
 use crate::joypad::{GameBoyKey, Joypad};
+#[path = "tests_backup/test_runner.rs"]
 mod test_runner;
 mod timer;
 use crate::test_runner::run_test_simulation;
 use crate::timer::Timer;
 #[cfg(test)]
+#[path = "tests_backup/opcode_test.rs"]
 mod opcode_test;
 
 fn main() {
@@ -28,13 +30,11 @@ fn main() {
     if args.len() > 1 && args[1] == "test" {
         println!("執行測試模式...");
         let test_result = run_test_simulation();
-        println!("{}", test_result);
-
-        // 將測試結果保存到文件
-        if let Ok(mut file) = std::fs::File::create("test_result.txt") {
+        println!("{}", test_result); // 將測試結果保存到文件
+        if let Ok(mut file) = std::fs::File::create("debug_report/test_result.txt") {
             use std::io::Write;
             let _ = file.write_all(test_result.as_bytes());
-            println!("測試結果已保存到 test_result.txt");
+            println!("測試結果已保存到 debug_report/test_result.txt");
         }
         return;
     } // 正常模式：創建 MMU 和 CPU
@@ -59,13 +59,20 @@ fn main() {
             println!("成功載入 ROM: {} ({} bytes)", rom_path, rom_data.len());
         }
         Err(e) => {
-            // 如果無法載入實際 ROM，使用最小化測試 ROM
+            // 如果無法載入實際 ROM，使用改進的測試 ROM
             println!("無法載入 ROM '{}': {}", rom_path, e);
             println!("使用內建測試 ROM...");
             let test_rom = vec![
+                0x3E, 0x91, // LD A, 0x91 (確保 LCDC 正確設定)
+                0xE0, 0x40, // LDH (0xFF40), A (設定 LCDC)
+                0x3E, 0xFC, // LD A, 0xFC (設定背景調色板)
+                0xE0, 0x47, // LDH (0xFF47), A (設定 BGP)
+                0x3E, 0xFF, // LD A, 0xFF (設定瓦片數據)
+                0xEA, 0x00, 0x80, // LD (0x8000), A (寫入 VRAM 瓦片數據)
+                0x3E, 0x01, // LD A, 0x01 (設定瓦片 ID)
+                0xEA, 0x00, 0x98, // LD (0x9800), A (寫入背景瓦片地圖)
                 0x00, // NOP
-                0x3E, 0x42, // LD A, 0x42
-                0x18, 0xFC, // JR -4 (跳回 NOP)
+                0x18, 0xFE, // JR -2 (無限循環)
             ];
             cpu.load_rom(&test_rom);
         }

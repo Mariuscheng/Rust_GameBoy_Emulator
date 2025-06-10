@@ -337,7 +337,7 @@ pub struct APU {
 impl APU {
     pub fn new() -> Self {
         let debug_file = if cfg!(debug_assertions) {
-            File::create("c:\\Users\\mariu\\Desktop\\Rust\\gameboy_emulator\\gameboy_emulator\\apu_debug.txt").ok()
+            File::create("debug_report/apu_debug.txt").ok()
         } else {
             None
         };
@@ -696,11 +696,10 @@ impl APU {
             let _ = file.flush();
         }
     }
-
     pub fn set_debug_mode(&mut self, enabled: bool) {
         self.debug_enabled = enabled;
         if enabled && self.debug_file.is_none() {
-            self.debug_file = File::create("c:\\Users\\mariu\\Desktop\\Rust\\gameboy_emulator\\gameboy_emulator\\apu_debug.txt").ok();
+            self.debug_file = File::create("debug_report/apu_debug.txt").ok();
         }
     }
 
@@ -753,9 +752,8 @@ impl APU {
             self.audio_step_count
         )
     }
-
     pub fn save_final_report(&self) {
-        let report_path = "c:\\Users\\mariu\\Desktop\\Rust\\gameboy_emulator\\gameboy_emulator\\apu_final_report.txt";
+        let report_path = "debug_report/apu_final_report.txt";
         if let Ok(mut file) = File::create(report_path) {
             let report = self.generate_status_report();
             let _ = file.write_all(report.as_bytes());

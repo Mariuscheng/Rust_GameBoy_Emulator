@@ -80,7 +80,6 @@ impl CPU {
         // let pos = (self.registers.pc as usize) % 0x2000;
         // self.mmu.vram.borrow_mut()[pos] = self.registers.pc as u8;
     }
-
     pub fn load_rom(&mut self, rom: &[u8]) {
         self.mmu.load_rom(rom.to_vec());
     }
@@ -321,9 +320,7 @@ impl CPU {
 
     pub fn get_instruction_count(&self) -> u64 {
         self.instruction_count
-    }
-
-    pub fn save_performance_report(&self) {
+    }    pub fn save_performance_report(&self) {
         let report = format!(
             "Performance Report:\n\
              Total Instructions: {}\n\
@@ -340,7 +337,7 @@ impl CPU {
             self.registers.l
         );
 
-        if let Ok(mut file) = std::fs::File::create("performance_report.txt") {
+        if let Ok(mut file) = std::fs::File::create("debug_report/performance_report.txt") {
             use std::io::Write;
             let _ = file.write_all(report.as_bytes());
         }

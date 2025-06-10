@@ -45,10 +45,7 @@ pub struct Joypad {
 
 impl Joypad {
     pub fn new() -> Self {
-        let debug_file = File::create(
-            "c:\\Users\\mariu\\Desktop\\Rust\\gameboy_emulator\\gameboy_emulator\\joypad_debug.txt",
-        )
-        .ok();
+        let debug_file = File::create("debug_report/joypad_debug.txt").ok();
 
         Self {
             direction_keys: 0x0F, // 所有方向鍵未按下
@@ -257,7 +254,7 @@ impl Joypad {
 
     // 保存最終報告到檔案
     pub fn save_final_report(&self) {
-        let report_path = "c:\\Users\\mariu\\Desktop\\Rust\\gameboy_emulator\\gameboy_emulator\\joypad_final_report.txt";
+        let report_path = "debug_report/joypad_final_report.txt";
         if let Ok(mut file) = File::create(report_path) {
             let report = self.generate_status_report();
             let _ = file.write_all(report.as_bytes());
