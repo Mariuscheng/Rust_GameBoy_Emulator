@@ -187,8 +187,7 @@ impl MMU {
 
         // ROM header area (完全按照 Fix_blank_screen.md)
         fallback[0x100] = 0x00; // Entry point: NOP
-        fallback[0x101] = 0x3E; // LD A, value
-        fallback[0x102] = 0x91; // value = 0x91 (LCDC value to enable LCD and BG)
+        fallback[0x101] = 0x3E; // LD A, value        fallback[0x102] = 0x91; // value = 0x91 (LCDC value to enable LCD and BG)
 
         // Set LCDC register to enable LCD and background
         fallback[0x103] = 0xE0; // LDH (0xFF00+n), A
@@ -799,36 +798,34 @@ impl MMU {
     pub fn get_mmu_version(&self) -> &'static str {
         "clean_mmu_v2.0"
     }
-
     /// 手動寫入測試模式到 VRAM（根據 Fix_blank_screen.md 建議）
     pub fn write_test_pattern_to_vram(&mut self) {
-        println!("🔧 手動寫入測試模式到 VRAM...");
+        println!("🔧 手動寫入測試模式到 VRAM (正確 write_byte 方式)...");
 
-        // Write a simple test pattern to first tile
-        let mut vram = self.vram.borrow_mut();
+        // 使用 write_byte 方法而不是直接訪問 vram 陣列
 
         // First tile: solid black (all 1s)
         for i in 0..16 {
-            vram[i] = 0xFF;
+            self.write_byte(0x8000 + i as u16, 0xFF);
         }
 
         // Second tile: checkerboard
         for i in (16..32).step_by(2) {
-            vram[i] = 0xAA;
-            vram[i + 1] = 0x55;
+            self.write_byte(0x8000 + i as u16, 0xAA);
+            self.write_byte(0x8000 + (i + 1) as u16, 0x55);
         }
 
         // Third tile: horizontal stripes
         for i in (32..48).step_by(4) {
-            vram[i] = 0xFF;
-            vram[i + 1] = 0xFF;
-            vram[i + 2] = 0x00;
-            vram[i + 3] = 0x00;
+            self.write_byte(0x8000 + i as u16, 0xFF);
+            self.write_byte(0x8000 + (i + 1) as u16, 0xFF);
+            self.write_byte(0x8000 + (i + 2) as u16, 0x00);
+            self.write_byte(0x8000 + (i + 3) as u16, 0x00);
         }
 
         // Make first few tiles in BG map point to these test tiles
         for i in 0..10 {
-            vram[0x1800 + i] = (i % 3) as u8; // 使用前3個測試瓦片
+            self.write_byte(0x9800 + i as u16, (i % 3) as u8); // 使用前3個測試瓦片
         }
 
         println!("🔧 測試模式寫入完成:");

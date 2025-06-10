@@ -51,13 +51,13 @@ impl PPU {
     }
     pub fn set_oam(&mut self, data: [u8; 160]) {
         self.oam = data;
-    }
-    pub fn step(&mut self) {
+    }    pub fn step(&mut self) {
         // 檢查 LCD 是否啟用 (LCDC 第 7 位)
         if (self.lcdc & 0x80) == 0 {
-            // LCD 關閉，清空 framebuffer 為白色
+            // LCD 關閉，顯示一個明顯的顏色以便調試
+            println!("⚠️ LCD 已關閉 (LCDC: 0x{:02X})", self.lcdc);
             for pixel in &mut self.framebuffer {
-                *pixel = 0xFFFFFFFFu32; // 白色
+                *pixel = 0xFF0000FFu32; // 藍色，明顯指示 LCD 關閉
             }
             return;
         }
@@ -65,13 +65,14 @@ impl PPU {
         // 檢查背景是否啟用 (LCDC 第 0 位)
         let bg_enable = (self.lcdc & 0x01) != 0;
 
-        // 如果背景關閉，顯示白屏
+        // 如果背景關閉，顯示一個明顯的顏色以便調試
         if !bg_enable {
+            println!("⚠️ 背景已關閉 (LCDC: 0x{:02X})", self.lcdc);
             for pixel in &mut self.framebuffer {
-                *pixel = 0xFFFFFFFFu32; // 白色
+                *pixel = 0xFFFF0000u32; // 紅色，明顯指示背景關閉
             }
             return;
-        } // 背景和 Window 渲染
+        }// 背景和 Window 渲染
         for y in 0..144 {
             for x in 0..160 {
                 let mut color = 0xFFFFFFFFu32; // 默認白色
