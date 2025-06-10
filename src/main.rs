@@ -88,8 +88,13 @@ fn main() {
     let start_time = std::time::Instant::now();
     let mut cycle_count = 0; // 根據 Fix_blank_screen.md 建議，手動寫入測試模式到 VRAM
     println!("💡 應用 Fix_blank_screen.md 建議 - 寫入視覺測試模式...");
-    // 直接寫入 VRAM 而不是呼叫 MMU 的方法
-    write_test_pattern_to_vram(&cpu.mmu.vram);
+    // 直接調用 MMU 的測試模式寫入方法
+    cpu.mmu.write_test_pattern_to_vram();
+
+    // 強制同步一次 VRAM 到 PPU
+    let vram_data = cpu.mmu.vram();
+    ppu.vram.copy_from_slice(&vram_data);
+    println!("✅ VRAM 測試模式已寫入並同步到 PPU");
 
     println!("開始模擬循環...");
     while window.is_open() && !window.is_key_down(Key::Escape) {
@@ -202,7 +207,76 @@ fn main() {
         ppu.set_scy(cpu.mmu.read_byte(0xFF42));
         ppu.set_wx(cpu.mmu.read_byte(0xFF4B));
         ppu.set_wy(cpu.mmu.read_byte(0xFF4A));
-        ppu.set_lcdc(cpu.mmu.read_byte(0xFF40)); // 設置 LCD 控制寄存器        ppu.step();
+        ppu.set_lcdc(cpu.mmu.read_byte(0xFF40)); // 設置 LCD 控制寄存器
+
+        // 執行 PPU 渲染
+        ppu.step(); // 確保 framebuffer 有效數據，如果全白則進行診斷
+        let framebuffer = ppu.get_framebuffer();
+        let all_white = framebuffer.iter().all(|&pixel| pixel == 0xFFFFFFFF);
+        let mostly_white = framebuffer
+            .iter()
+            .filter(|&&pixel| pixel == 0xFFFFFFFF)
+            .count()
+            > (framebuffer.len() * 95 / 100);
+
+        if frame_count % 1000 == 0 && (all_white || mostly_white) {
+            println!("⚠️ 檢測到屏幕問題，執行深度診斷...");
+            println!("LCDC: 0x{:02X}", cpu.mmu.read_byte(0xFF40));
+            println!("BGP: 0x{:02X}", cpu.mmu.read_byte(0xFF47));
+            let vram_sample = &vram_data[0..16];
+            println!("VRAM 瓦片數據: {:02X?}", vram_sample);
+            let tilemap_sample = &vram_data[0x1800..0x1810];
+            println!("瓦片地圖樣本: {:02X?}", tilemap_sample);
+
+            // 檢查瓦片 ID 1 的完整數據 (16 bytes)
+            println!("瓦片 ID 1 完整數據:");
+            for i in 0..8 {
+                let addr = 16 + i * 2; // 瓦片 1 開始於字節 16
+                println!(
+                    "  行 {}: {:02X} {:02X}",
+                    i,
+                    vram_data[addr],
+                    vram_data[addr + 1]
+                );
+            }
+
+            // 檢查 framebuffer 的一些像素
+            println!(
+                "Framebuffer 樣本 (前16個像素): {:08X?}",
+                &framebuffer[0..16]
+            );
+
+            // 手動計算第一個像素的顏色
+            let tile_id = vram_data[0x1800]; // 第一個瓦片 ID
+            println!("使用的瓦片 ID: {}", tile_id);
+
+            if tile_id > 0 {
+                let tile_addr = (tile_id as usize) * 16;
+                println!("瓦片地址: 0x{:04X}", tile_addr);
+                if tile_addr + 1 < vram_data.len() {
+                    let low = vram_data[tile_addr];
+                    let high = vram_data[tile_addr + 1];
+                    println!("瓦片第一行數據: low=0x{:02X}, high=0x{:02X}", low, high);
+
+                    // 計算第一個像素
+                    let color_id = ((high >> 7) & 1) << 1 | ((low >> 7) & 1);
+                    let bgp = cpu.mmu.read_byte(0xFF47);
+                    let shade = (bgp >> (color_id * 2)) & 0b11;
+                    println!(
+                        "色彩 ID: {}, 調色板位置: {}, 最終顏色: {}",
+                        color_id,
+                        shade,
+                        match shade {
+                            0 => "白色",
+                            1 => "淺灰",
+                            2 => "深灰",
+                            3 => "黑色",
+                            _ => "錯誤",
+                        }
+                    );
+                }
+            }
+        }
 
         // 每 2000 幀輸出一次 VRAM 調試信息
         if frame_count % 2000 == 0 {

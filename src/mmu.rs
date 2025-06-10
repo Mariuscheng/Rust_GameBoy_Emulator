@@ -64,7 +64,7 @@ impl RomInfo {
 
     pub fn from_rom(rom_data: &[u8]) -> Self {
         let mut info = Self::new();
-        
+
         if rom_data.len() >= 0x150 {
             // 提取標題
             let mut title = String::new();
@@ -79,14 +79,14 @@ impl RomInfo {
                 }
             }
             info.title = title.trim_end_matches('\0').to_string();
-            
+
             // 提取ROM類型、大小和RAM大小
             if rom_data.len() > 0x147 {
                 info.rom_type = rom_data[0x147];
-                
+
                 if rom_data.len() > 0x148 {
                     info.rom_size = rom_data[0x148];
-                    
+
                     if rom_data.len() > 0x149 {
                         info.ram_size = rom_data[0x149];
                     }
@@ -96,7 +96,7 @@ impl RomInfo {
             info.is_test_rom = true;
             info.title = "TEST ROM".to_string();
         }
-        
+
         info
     }
 }
@@ -114,10 +114,10 @@ pub struct MMU {
     pub timer: Timer,
     pub apu: Rc<RefCell<APU>>,
     pub mbc: MBCController,
-    pub rom_info: RomInfo,      // 新增ROM資訊
-    pub rom_read_count: usize,  // 計數器
-    pub vram_write_count: usize,// 計數器
-    pub debug_mode: bool,       // 調試模式
+    pub rom_info: RomInfo,       // 新增ROM資訊
+    pub rom_read_count: usize,   // 計數器
+    pub vram_write_count: usize, // 計數器
+    pub debug_mode: bool,        // 調試模式
 }
 
 impl MMU {
@@ -518,7 +518,8 @@ impl MMU {
             }
             0xFF00 => {
                 // Joypad register
-                let mut value = 0xCF; // 高4位總是1                if self.joypad.select_direction {
+                let mut value = 0xCF; // 高4位總是1
+                if self.joypad.select_direction {
                     value &= self.joypad.direction_keys;
                 }
                 if self.joypad.select_action {
@@ -545,6 +546,10 @@ impl MMU {
                 self.memory[addr as usize]
             }
             0xFFFF => self.ie_reg, // Interrupt enable
+            _ => {
+                // Unmapped memory region
+                0xFF
+            }
         }
     }
 
@@ -609,7 +614,8 @@ impl MMU {
                 oam[(addr - 0xFE00) as usize] = value;
             }
             0xFF00 => {
-                // Joypad register                self.joypad.select_direction = (value & 0x10) == 0;
+                // Joypad register
+                self.joypad.select_direction = (value & 0x10) == 0;
                 self.joypad.select_action = (value & 0x20) == 0;
             }
             0xFF01..=0xFF0E => {
@@ -638,6 +644,9 @@ impl MMU {
                 // Interrupt Enable
                 self.ie_reg = value;
             }
+            _ => {
+                // Unmapped memory region - ignore writes
+            }
         }
     }
 
@@ -660,7 +669,6 @@ impl MMU {
     pub fn reset_interrupts(&mut self, flags: u8) {
         self.if_reg &= !flags;
     }
-
     pub fn read_word(&mut self, addr: u16) -> u16 {
         let low = self.read_byte(addr) as u16;
         let high = self.read_byte(addr + 1) as u16;
@@ -670,23 +678,41 @@ impl MMU {
     pub fn write_word(&mut self, addr: u16, value: u16) {
         self.write_byte(addr, (value & 0xFF) as u8);
         self.write_byte(addr + 1, (value >> 8) as u8);
-    }    pub fn update_joypad(&mut self, button_id: u8, pressed: bool) {
+    }
+
+    pub fn update_joypad(&mut self, button_id: u8, pressed: bool) {
         // Convert boolean pressed to appropriate u8 values for direction_keys and action_keys
         let (direction_keys, action_keys) = match pressed {
             // When pressed, use current values with button_id bit cleared (0 = pressed)
             true => {
-                let direction = if button_id <= 3 { self.joypad.direction_keys & !(1 << button_id) } else { self.joypad.direction_keys };
-                let action = if button_id >= 4 { self.joypad.action_keys & !(1 << (button_id - 4)) } else { self.joypad.action_keys };
+                let direction = if button_id <= 3 {
+                    self.joypad.direction_keys & !(1 << button_id)
+                } else {
+                    self.joypad.direction_keys
+                };
+                let action = if button_id >= 4 {
+                    self.joypad.action_keys & !(1 << (button_id - 4))
+                } else {
+                    self.joypad.action_keys
+                };
                 (direction, action)
-            },
+            }
             // When released, use current values with button_id bit set (1 = released)
             false => {
-                let direction = if button_id <= 3 { self.joypad.direction_keys | (1 << button_id) } else { self.joypad.direction_keys };
-                let action = if button_id >= 4 { self.joypad.action_keys | (1 << (button_id - 4)) } else { self.joypad.action_keys };
+                let direction = if button_id <= 3 {
+                    self.joypad.direction_keys | (1 << button_id)
+                } else {
+                    self.joypad.direction_keys
+                };
+                let action = if button_id >= 4 {
+                    self.joypad.action_keys | (1 << (button_id - 4))
+                } else {
+                    self.joypad.action_keys
+                };
                 (direction, action)
             }
         };
-        
+
         self.joypad.update_button(direction_keys, action_keys);
     }
 

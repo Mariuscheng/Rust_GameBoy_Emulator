@@ -15,7 +15,7 @@ impl PPU {
     pub fn new() -> Self {
         let ppu = Self {
             vram: [0; 0x2000],
-            framebuffer: vec![0xFFFFFFFF; 160 * 144],
+            framebuffer: vec![0xFFFFFFFFu32; 160 * 144],
             bgp: 0xFC,  // 默认 palette（與MMU初始化值匹配）
             obp0: 0xFF, // sprite palette 預設（與MMU初始化值匹配）
             scx: 0,
@@ -57,7 +57,7 @@ impl PPU {
         if (self.lcdc & 0x80) == 0 {
             // LCD 關閉，清空 framebuffer 為白色
             for pixel in &mut self.framebuffer {
-                *pixel = 0xFFFFFFFF; // 白色
+                *pixel = 0xFFFFFFFFu32; // 白色
             }
             return;
         }
@@ -68,13 +68,13 @@ impl PPU {
         // 如果背景關閉，顯示白屏
         if !bg_enable {
             for pixel in &mut self.framebuffer {
-                *pixel = 0xFFFFFFFF; // 白色
+                *pixel = 0xFFFFFFFFu32; // 白色
             }
             return;
         } // 背景和 Window 渲染
         for y in 0..144 {
             for x in 0..160 {
-                let mut color = 0xFFFFFFFF; // 默認白色
+                let mut color = 0xFFFFFFFFu32; // 默認白色
 
                 // 檢查Window是否啟用並且在範圍內 (LCDC 第 5 位)
                 let window_enable = (self.lcdc & 0x20) != 0;
@@ -144,15 +144,15 @@ impl PPU {
                     let hi = (high >> bit) & 1;
                     let color_id = (hi << 1) | lo;
                     if color_id == 0 {
-                        continue;
-                    } // 透明
+                        continue; // 透明
+                    }
                     let shade = (self.obp0 >> (color_id * 2)) & 0b11;
                     let color = match shade {
-                        0 => 0xFFFFFFFF,
-                        1 => 0xFFAAAAAA,
-                        2 => 0xFF555555,
-                        3 => 0xFF000000,
-                        _ => 0xFF00FF00,
+                        0 => 0xFFFFFFFFu32,
+                        1 => 0xFFAAAAAAu32,
+                        2 => 0xFF555555u32,
+                        3 => 0xFF000000u32,
+                        _ => 0xFF00FF00u32,
                     };
                     let idx = (screen_y as usize) * 160 + (screen_x as usize);
                     if idx < self.framebuffer.len() {
@@ -164,9 +164,7 @@ impl PPU {
     }
     pub fn get_framebuffer(&self) -> &[u32] {
         &self.framebuffer
-    }
-
-    // 獲取瓦片像素顏色的輔助方法
+    } // 獲取瓦片像素顏色的輔助方法
     fn get_tile_pixel_color(
         &self,
         tile_id: u8,
@@ -176,9 +174,8 @@ impl PPU {
     ) -> u32 {
         // 瓦片數據開始於 VRAM 的 $8000 (0x0000 in vram array)
         let tile_data_addr = (tile_id as usize) * 16 + pixel_y * 2;
-
         if tile_data_addr + 1 >= self.vram.len() {
-            return 0xFFFFFFFF; // 如果超出範圍，返回白色
+            return 0xFFFFFFFFu32; // 如果超出範圍，返回白色
         }
 
         let low_byte = self.vram[tile_data_addr];
@@ -187,16 +184,41 @@ impl PPU {
         let bit_pos = 7 - pixel_x;
         let low_bit = (low_byte >> bit_pos) & 1;
         let high_bit = (high_byte >> bit_pos) & 1;
-        let color_id = (high_bit << 1) | low_bit;
+        let color_id = (high_bit << 1) | low_bit; // 添加調試信息 - 只為第一個瓦片的第一個像素
+        if tile_id == 1 && pixel_x == 0 && pixel_y == 0 {
+            println!(
+                "🔍 PPU 調試 - 瓦片 {} 像素 ({}, {}):",
+                tile_id, pixel_x, pixel_y
+            );
+            println!("  瓦片地址: 0x{:04X}", tile_data_addr);
+            println!("  低字節: 0x{:02X}, 高字節: 0x{:02X}", low_byte, high_byte);
+            println!(
+                "  位位置: {}, 低位: {}, 高位: {}",
+                bit_pos, low_bit, high_bit
+            );
+            println!("  色彩 ID: {}, 調色板: 0x{:02X}", color_id, palette);
+            let shade = (palette >> (color_id * 2)) & 0b11;
+            println!(
+                "  最終陰影: {} -> {:08X}",
+                shade,
+                match shade {
+                    0 => 0xFFFFFFFFu32,
+                    1 => 0xFFAAAAAAu32,
+                    2 => 0xFF555555u32,
+                    3 => 0xFF000000u32,
+                    _ => 0xFF00FF00u32,
+                }
+            );
+        }
 
         // 從調色板獲取實際顏色
         let shade = (palette >> (color_id * 2)) & 0b11;
         match shade {
-            0 => 0xFFFFFFFF, // 白色 (最亮)
-            1 => 0xFFAAAAAA, // 淺灰
-            2 => 0xFF555555, // 深灰
-            3 => 0xFF000000, // 黑色 (最暗)
-            _ => 0xFF00FF00, // 錯誤顏色（綠色）
+            0 => 0xFFFFFFFFu32, // 白色 (最亮)
+            1 => 0xFFAAAAAAu32, // 淺灰
+            2 => 0xFF555555u32, // 深灰
+            3 => 0xFF000000u32, // 黑色 (最暗)
+            _ => 0xFF00FF00u32, // 錯誤顏色（綠色）
         }
     }
 }
