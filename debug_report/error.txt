@@ -1,0 +1,314 @@
+warning: unused import: `std::collections::HashSet`
+ --> src\mmu.rs:4:5
+  |
+4 | use std::collections::HashSet;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: unused imports: `Write` and `self`
+  --> src\main.rs:16:15
+   |
+16 | use std::io::{self, Write};
+   |               ^^^^  ^^^^^
+
+warning: unused variable: `frame_counter`
+   --> src\main.rs:164:13
+    |
+164 |     let mut frame_counter = 0;
+    |             ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_frame_counter`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: variable does not need to be mutable
+  --> src\main.rs:47:9
+   |
+47 |     let mut debug_console = DebugConsole::new();
+   |         ----^^^^^^^^^^^^^
+   |         |
+   |         help: remove this `mut`
+   |
+   = note: `#[warn(unused_mut)]` on by default
+
+warning: variable does not need to be mutable
+   --> src\main.rs:164:9
+    |
+164 |     let mut frame_counter = 0;
+    |         ----^^^^^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: variable does not need to be mutable
+   --> src\main.rs:166:9
+    |
+166 |     let mut step_mode = false;
+    |         ----^^^^^^^^^
+    |         |
+    |         help: remove this `mut`
+
+warning: field `bgp` is never read
+  --> src\mmu.rs:56:9
+   |
+48 | pub struct MMU {
+   |            --- field in this struct
+...
+56 |     pub bgp: u8,
+   |         ^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: associated items `new` and `set_joypad` are never used
+   --> src\mmu.rs:69:12
+    |
+68  | impl MMU {
+    | -------- associated items in this implementation
+69  |     pub fn new() -> Self {
+    |            ^^^
+...
+459 |     pub fn set_joypad(&mut self, value: u8) {
+    |            ^^^^^^^^^^
+
+warning: multiple methods are never used
+    --> src\cpu.rs:122:8
+     |
+85   | impl CPU {
+     | -------- methods in this implementation
+...
+122  |     fn write_word(&mut self, addr: u16, value: u16) {
+     |        ^^^^^^^^^^
+...
+128  |     fn pop_word(&mut self) -> u16 {
+     |        ^^^^^^^^
+...
+396  |     pub fn add_breakpoint(&mut self, address: u16) {
+     |            ^^^^^^^^^^^^^^
+...
+402  |     pub fn remove_breakpoint(&mut self, address: u16) {
+     |            ^^^^^^^^^^^^^^^^^
+...
+409  |     pub fn clear_breakpoints(&mut self) {
+     |            ^^^^^^^^^^^^^^^^^
+...
+415  |     pub fn set_log_instructions(&mut self, enabled: bool) {
+     |            ^^^^^^^^^^^^^^^^^^^^
+...
+421  |     pub fn get_last_instruction_log(&self) -> &Vec<(u16, u8, String)> {
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1060 |     pub fn dump_memory(&self, start: u16, end: u16) {
+     |            ^^^^^^^^^^^
+...
+1081 |     pub fn peek_ahead(&self, steps: usize) -> Vec<(u16, u8, String)> {
+     |            ^^^^^^^^^^
+...
+1129 |     pub fn generate_detailed_report(&self) -> String {
+     |            ^^^^^^^^^^^^^^^^^^^^^^^^
+...
+1182 |         pub fn debug_step(&mut self) -> u8 {
+     |                ^^^^^^^^^^
+...
+1212 |         pub fn check_breakpoint(&self) -> bool {
+     |                ^^^^^^^^^^^^^^^^
+
+warning: method `get_framebuffer` is never used
+   --> src\ppu.rs:639:12
+    |
+52  | impl PPU {
+    | -------- method in this implementation
+...
+639 |     pub fn get_framebuffer(&self) -> &[u32] {
+    |            ^^^^^^^^^^^^^^^
+
+warning: field `stream_handle` is never read
+  --> src\apu.rs:36:5
+   |
+11 | pub struct APU {
+   |            --- field in this struct
+...
+36 |     stream_handle: Option<OutputStreamHandle>,
+   |     ^^^^^^^^^^^^^
+
+warning: method `set_sound_enabled` is never used
+   --> src\apu.rs:355:12
+    |
+44  | impl APU {
+    | -------- method in this implementation
+...
+355 |     pub fn set_sound_enabled(&mut self, enabled: bool) {
+    |            ^^^^^^^^^^^^^^^^^
+
+warning: struct `DebugLogger` is never constructed
+ --> src\debug_utils.rs:8:12
+  |
+8 | pub struct DebugLogger {
+  |            ^^^^^^^^^^^
+
+warning: associated items `new`, `enable`, `set_log_file`, `log`, `record_instruction`, and `take_snapshot` are never used
+  --> src\debug_utils.rs:19:12
+   |
+18 | impl DebugLogger {
+   | ---------------- associated items in this implementation
+19 |     pub fn new() -> Self {
+   |            ^^^
+...
+31 |     pub fn enable(&mut self, enabled: bool) {
+   |            ^^^^^^
+...
+35 |     pub fn set_log_file(&mut self, path: &str) -> Result<(), std::io::Error> {
+   |            ^^^^^^^^^^^^
+...
+60 |     pub fn log(&mut self, message: &str) -> Result<(), std::io::Error> {
+   |            ^^^
+...
+74 |     pub fn record_instruction(&mut self, cpu: &CPU, opcode: u8, _cycles: u8, exec_time: Duration) {
+   |            ^^^^^^^^^^^^^^^^^^
+...
+93 |     fn take_snapshot(&mut self, cpu: &CPU) {
+   |        ^^^^^^^^^^^^^
+
+warning: function `format_memory_dump` is never used
+   --> src\debug_utils.rs:143:8
+    |
+143 | pub fn format_memory_dump(data: &[u8], base_addr: u16) -> String {
+    |        ^^^^^^^^^^^^^^^^^^
+
+warning: function `disassemble_region` is never used
+   --> src\debug_utils.rs:183:8
+    |
+183 | pub fn disassemble_region(cpu: &CPU, start_addr: u16, length: u16) -> String {
+    |        ^^^^^^^^^^^^^^^^^^
+
+warning: function `log_to_file` is never used
+   --> src\debug_utils.rs:219:8
+    |
+219 | pub fn log_to_file(filename: &str, content: &str) -> Result<(), std::io::Error> {
+    |        ^^^^^^^^^^^
+
+warning: function `generate_interrupt_report` is never used
+   --> src\debug_utils.rs:237:8
+    |
+237 | pub fn generate_interrupt_report(cpu: &CPU) -> String {
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `analyze_execution_loop` is never used
+   --> src\debug_utils.rs:315:8
+    |
+315 | pub fn analyze_execution_loop(
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: fields `command_history`, `breakpoints`, and `watches` are never read
+   --> src\debug_utils.rs:382:5
+    |
+380 | pub struct DebugConsole {
+    |            ------------ fields in this struct
+381 |     is_active: bool,
+382 |     command_history: Vec<String>,
+    |     ^^^^^^^^^^^^^^^
+383 |     breakpoints: HashSet<u16>,
+    |     ^^^^^^^^^^^
+384 |     watches: HashSet<u16>,
+    |     ^^^^^^^
+
+warning: methods `activate`, `process_command`, `check_watches`, `safe_process_command`, `log_event`, and `generate_error_report` are never used
+   --> src\debug_utils.rs:397:12
+    |
+387 | impl DebugConsole {
+    | ----------------- methods in this implementation
+...
+397 |     pub fn activate(&mut self) {
+    |            ^^^^^^^^
+...
+406 |     pub fn process_command(&mut self, cpu: &mut crate::cpu::CPU, command: &str) {
+    |            ^^^^^^^^^^^^^^^
+...
+531 |     pub fn check_watches(&self, cpu: &crate::cpu::CPU) {
+    |            ^^^^^^^^^^^^^
+...
+539 |     pub fn safe_process_command(&mut self, cpu: &mut crate::cpu::CPU, command: &str) -> bool {
+    |            ^^^^^^^^^^^^^^^^^^^^
+...
+556 |     pub fn log_event(&self, message: &str) {
+    |            ^^^^^^^^^
+...
+566 |     pub fn generate_error_report(&self, cpu: &crate::cpu::CPU, error: &str) -> String {
+    |            ^^^^^^^^^^^^^^^^^^^^^
+
+warning: methods `enable`, `reset`, and `report` are never used
+   --> src\debug_utils.rs:614:12
+    |
+604 | impl Profiler {
+    | ------------- methods in this implementation
+...
+614 |     pub fn enable(&mut self, enabled: bool) {
+    |            ^^^^^^
+...
+646 |     pub fn reset(&mut self) {
+    |            ^^^^^
+...
+650 |     pub fn report(&self) -> String {
+    |            ^^^^^^
+
+warning: function `validate_rom` is never used
+   --> src\debug_utils.rs:702:8
+    |
+702 | pub fn validate_rom(rom_data: &[u8]) -> Result<(), String> {
+    |        ^^^^^^^^^^^^
+
+warning: function `process_vram_debug_command` is never used
+   --> src\debug_utils.rs:730:8
+    |
+730 | pub fn process_vram_debug_command(
+    |        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: fields `vram_breakpoints`, `vram_watches`, and `watch_values` are never read
+  --> src\vram_debug.rs:19:5
+   |
+9  | pub struct VRAMDebugger {
+   |            ------------ fields in this struct
+...
+19 |     vram_breakpoints: std::collections::HashSet<usize>,
+   |     ^^^^^^^^^^^^^^^^
+20 |     // VRAM 監視點（VRAM 偏移地址，0x8000-0x9FFF 的相對偏移）
+21 |     vram_watches: std::collections::HashSet<usize>,
+   |     ^^^^^^^^^^^^
+22 |     // 記錄上一次監視點的值
+23 |     watch_values: std::collections::HashMap<usize, u8>,
+   |     ^^^^^^^^^^^^
+
+warning: multiple methods are never used
+   --> src\vram_debug.rs:482:12
+    |
+35  | impl VRAMDebugger {
+    | ----------------- methods in this implementation
+...
+482 |     pub fn add_vram_breakpoint(&mut self, addr: u16) {
+    |            ^^^^^^^^^^^^^^^^^^^
+...
+501 |     pub fn remove_vram_breakpoint(&mut self, addr: u16) {
+    |            ^^^^^^^^^^^^^^^^^^^^^^
+...
+514 |     pub fn clear_vram_breakpoints(&mut self) {
+    |            ^^^^^^^^^^^^^^^^^^^^^^
+...
+521 |     pub fn add_vram_watch(&mut self, addr: u16) {
+    |            ^^^^^^^^^^^^^^
+...
+539 |     pub fn remove_vram_watch(&mut self, addr: u16) {
+    |            ^^^^^^^^^^^^^^^^^
+...
+553 |     pub fn clear_vram_watches(&mut self) {
+    |            ^^^^^^^^^^^^^^^^^^
+...
+561 |     pub fn check_vram_breakpoints(&self, ppu: &PPU) -> bool {
+    |            ^^^^^^^^^^^^^^^^^^^^^^
+...
+578 |     pub fn check_vram_watches(&mut self, ppu: &PPU) {
+    |            ^^^^^^^^^^^^^^^^^^
+...
+606 |     pub fn dump_vram_watches(&self, ppu: &PPU) -> String {
+    |            ^^^^^^^^^^^^^^^^^
+
+warning: `gameboy_emulator` (bin "gameboy_emulator") generated 26 warnings (run `cargo fix --bin "gameboy_emulator"` to apply 5 suggestions)
+    Finished `release` profile [optimized] target(s) in 0.34s
+     Running `target\release\gameboy_emulator.exe`
+error
