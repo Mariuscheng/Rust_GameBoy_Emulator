@@ -823,9 +823,9 @@ impl MMU {
             self.write_byte(0x8000 + (i + 3) as u16, 0x00);
         }
 
-        // Make first few tiles in BG map point to these test tiles
-        for i in 0..10 {
-            self.write_byte(0x9800 + i as u16, (i % 3) as u8); // 使用前3個測試瓦片
+        // Make all tiles in BG map point to these test tiles
+        for i in 0..1024 {
+            self.write_byte(0x9800 + i as u16, (i % 3) as u8); // 循環使用前3個測試瓦片
         }
 
         println!("🔧 測試模式寫入完成:");

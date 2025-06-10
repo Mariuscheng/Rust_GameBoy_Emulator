@@ -17,19 +17,6 @@ pub struct Registers {
 
 impl Registers {
     // 標誌位操作
-    pub fn get_z_flag(&self) -> bool {
-        (self.f & 0x80) != 0
-    }
-    pub fn get_n_flag(&self) -> bool {
-        (self.f & 0x40) != 0
-    }
-    pub fn get_h_flag(&self) -> bool {
-        (self.f & 0x20) != 0
-    }
-    pub fn get_c_flag(&self) -> bool {
-        (self.f & 0x10) != 0
-    }
-
     pub fn set_z_flag(&mut self, value: bool) {
         if value {
             self.f |= 0x80;
@@ -317,6 +304,16 @@ impl CPU {
                 self.registers.h = (hl >> 8) as u8;
                 self.registers.l = hl as u8;
             }
+            0x32 => {
+                // LD (HL-), A (將 A 載入到 HL 指向的地址，然後 HL 減一)
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.mmu.write_byte(addr, self.registers.a);
+
+                // HL 減一
+                let hl = addr.wrapping_sub(1);
+                self.registers.h = (hl >> 8) as u8;
+                self.registers.l = hl as u8;
+            }
             0xB1 => {
                 // OR C (邏輯或 A 和 C)
                 self.registers.a = self.registers.a | self.registers.c;
@@ -327,73 +324,321 @@ impl CPU {
                 // DI (禁用中斷)
                 // TODO: 實現中斷禁用
             }
+            0x24 => {
+                // INC H (H 暫存器加一)
+                self.registers.h = self.registers.h.wrapping_add(1);
+                // TODO: 設置標誌位 Z, N=0, H
+            }
+            0x4D => {
+                // LD C, L (將 L 暫存器的值載入 C)
+                self.registers.c = self.registers.l;
+            }
+            0x1F => {
+                // RRA (Rotate Right Accumulator through Carry)
+                let _carry = self.registers.a & 0x01; // 獲取最低位
+                self.registers.a = self.registers.a >> 1;
+                // TODO: 實現進位標誌邏輯
+                // 如果之前有進位標誌，將其設置為最高位
+                // self.registers.a |= (old_carry << 7);
+                // 設置新的進位標誌
+                // self.registers.set_c_flag(carry != 0);
+                // self.registers.set_z_flag(false);
+                // self.registers.set_n_flag(false);
+                // self.registers.set_h_flag(false);
+            }
+            0xFF => {
+                // RST 38H (重置到地址 0x38)
+                // 將當前 PC 推入堆疊
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu
+                    .write_byte(self.registers.sp, self.registers.pc as u8);
+                // 跳轉到 0x38
+                self.registers.pc = 0x38;
+            }
+            0xCF => {
+                // RST 08H (重置到地址 0x08)
+                // 將當前 PC 推入堆疊
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu
+                    .write_byte(self.registers.sp, self.registers.pc as u8);
+                // 跳轉到 0x08
+                self.registers.pc = 0x08;
+            }
+            0x11 => {
+                // LD DE, nn
+                let lo = self.fetch();
+                let hi = self.fetch();
+                self.registers.d = hi;
+                self.registers.e = lo;
+            }
+            0x19 => {
+                // ADD HL, DE
+                let hl = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                let de = ((self.registers.d as u16) << 8) | (self.registers.e as u16);
+                let result = hl.wrapping_add(de);
+                self.registers.h = (result >> 8) as u8;
+                self.registers.l = result as u8;
+                // TODO: 設置標誌位 N=0, H, C
+            }
+            0xD1 => {
+                // POP DE
+                let lo = self.mmu.read_byte(self.registers.sp) as u8;
+                self.registers.sp = self.registers.sp.wrapping_add(1);
+                let hi = self.mmu.read_byte(self.registers.sp) as u8;
+                self.registers.sp = self.registers.sp.wrapping_add(1);
+                self.registers.e = lo;
+                self.registers.d = hi;
+            }
+            0xE5 => {
+                // PUSH HL
+                let hl = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, (hl >> 8) as u8);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, hl as u8);
+            }
+            0xC6 => {
+                // ADD A, n
+                let n = self.fetch();
+                self.registers.a = self.registers.a.wrapping_add(n);
+                // TODO: 設置標誌位 Z, N=0, H, C
+            }
+            0x30 => {
+                // JR NC, n
+                let offset = self.fetch() as i8;
+                // TODO: 真正檢查 C 標誌
+                let c_flag = false;
+                if !c_flag {
+                    self.registers.pc = ((self.registers.pc as i32) + (offset as i32)) as u16;
+                }
+            }
+            0x67 => {
+                // LD H, A
+                self.registers.h = self.registers.a;
+            }
+            0x36 => {
+                // LD (HL), n
+                let n = self.fetch();
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.mmu.write_byte(addr, n);
+            }
+            0xE1 => {
+                // POP HL
+                let lo = self.mmu.read_byte(self.registers.sp) as u8;
+                self.registers.sp = self.registers.sp.wrapping_add(1);
+                let hi = self.mmu.read_byte(self.registers.sp) as u8;
+                self.registers.sp = self.registers.sp.wrapping_add(1);
+                self.registers.l = lo;
+                self.registers.h = hi;
+            }
+            0x1A => {
+                // LD A, (DE)
+                let addr = ((self.registers.d as u16) << 8) | (self.registers.e as u16);
+                self.registers.a = self.mmu.read_byte(addr);
+            }
+            0x77 => {
+                // LD (HL), A
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.mmu.write_byte(addr, self.registers.a);
+            }
+            0xCC => {
+                // CALL Z, nn
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                let addr = (hi << 8) | lo;
+                // TODO: 真正檢查 Z 標誌
+                let z_flag = false;
+                if z_flag {
+                    self.registers.sp = self.registers.sp.wrapping_sub(1);
+                    self.mmu
+                        .write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                    self.registers.sp = self.registers.sp.wrapping_sub(1);
+                    self.mmu
+                        .write_byte(self.registers.sp, self.registers.pc as u8);
+                    self.registers.pc = addr;
+                }
+            }
+            0x63 => {
+                // LD H, E
+                self.registers.h = self.registers.e;
+            }
+            0x23 => {
+                // INC HL
+                let hl = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                let result = hl.wrapping_add(1);
+                self.registers.h = (result >> 8) as u8;
+                self.registers.l = result as u8;
+            }
+            0x1C => {
+                // INC E
+                self.registers.e = self.registers.e.wrapping_add(1);
+                // TODO: 設置標誌位 Z, N=0, H
+            }
+            0xD5 => {
+                // PUSH DE
+                let de = ((self.registers.d as u16) << 8) | (self.registers.e as u16);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, (de >> 8) as u8);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, de as u8);
+            }
+            0x7E => {
+                // LD A, (HL)
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.registers.a = self.mmu.read_byte(addr);
+            }
+            0xBE => {
+                // CP (HL) (比較 A 和 (HL) 的值，設置標誌位)
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                let value = self.mmu.read_byte(addr);
+                let result = self.registers.a.wrapping_sub(value);
+                // 設置標誌位 Z, N=1, H, C
+                self.registers.set_z_flag(result == 0);
+                self.registers.set_n_flag(true);
+                self.registers
+                    .set_h_flag((self.registers.a & 0x0F) < (value & 0x0F));
+                self.registers.set_c_flag(self.registers.a < value);
+            }
+            0x31 => {
+                // LD SP, nn
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                self.registers.sp = (hi << 8) | lo;
+            }
+            0xF5 => {
+                // PUSH AF
+                let af = ((self.registers.a as u16) << 8) | (self.registers.f as u16);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, (af >> 8) as u8);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, af as u8);
+            }
+            0xC5 => {
+                // PUSH BC
+                let bc = ((self.registers.b as u16) << 8) | (self.registers.c as u16);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, (bc >> 8) as u8);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, bc as u8);
+            }
+            0xC0 => {
+                // RET NZ
+                // TODO: 真正檢查 Z 標誌
+                let z_flag = false;
+                if !z_flag {
+                    let lo = self.mmu.read_byte(self.registers.sp) as u16;
+                    self.registers.sp = self.registers.sp.wrapping_add(1);
+                    let hi = self.mmu.read_byte(self.registers.sp) as u16;
+                    self.registers.sp = self.registers.sp.wrapping_add(1);
+                    self.registers.pc = (hi << 8) | lo;
+                }
+            }
+            0x6F => {
+                // LD L, A
+                self.registers.l = self.registers.a;
+            }
+            0xC9 => {
+                // RET
+                let lo = self.mmu.read_byte(self.registers.sp) as u16;
+                self.registers.sp = self.registers.sp.wrapping_add(1);
+                let hi = self.mmu.read_byte(self.registers.sp) as u16;
+                self.registers.sp = self.registers.sp.wrapping_add(1);
+                self.registers.pc = (hi << 8) | lo;
+            }
+            0xC1 => {
+                // POP BC
+                let lo = self.mmu.read_byte(self.registers.sp) as u8;
+                self.registers.sp = self.registers.sp.wrapping_add(1);
+                let hi = self.mmu.read_byte(self.registers.sp) as u8;
+                self.registers.sp = self.registers.sp.wrapping_add(1);
+                self.registers.c = lo;
+                self.registers.b = hi;
+            }
+            0xC8 => {
+                // RET Z
+                // TODO: 真正檢查 Z 標誌
+                let z_flag = false;
+                if z_flag {
+                    let lo = self.mmu.read_byte(self.registers.sp) as u16;
+                    self.registers.sp = self.registers.sp.wrapping_add(1);
+                    let hi = self.mmu.read_byte(self.registers.sp) as u16;
+                    self.registers.sp = self.registers.sp.wrapping_add(1);
+                    self.registers.pc = (hi << 8) | lo;
+                }
+            }
+            0xF1 => {
+                // POP AF
+                let lo = self.mmu.read_byte(self.registers.sp) as u8;
+                self.registers.sp = self.registers.sp.wrapping_add(1);
+                let hi = self.mmu.read_byte(self.registers.sp) as u8;
+                self.registers.sp = self.registers.sp.wrapping_add(1);
+                self.registers.f = lo & 0xF0; // F的低4位必須為0
+                self.registers.a = hi;
+            }
+            0x87 => {
+                // ADD A, A
+                self.registers.a = self.registers.a.wrapping_add(self.registers.a);
+                // TODO: 設置標誌位 Z, N=0, H, C
+            }
+            0x5F => {
+                // LD E, A
+                self.registers.e = self.registers.a;
+            }
+            0x5E => {
+                // LD E, (HL)
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.registers.e = self.mmu.read_byte(addr);
+            }
+            0x56 => {
+                // LD D, (HL)
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.registers.d = self.mmu.read_byte(addr);
+            }
+            0xE2 => {
+                // LD (C), A  (寫入A到(0xFF00+C))
+                let addr = 0xFF00 + self.registers.c as u16;
+                self.mmu.write_byte(addr, self.registers.a);
+            }
+            0x69 => {
+                // LD L, C
+                self.registers.l = self.registers.c;
+            }
+            0x5D => {
+                // LD E, L
+                self.registers.e = self.registers.l;
+            }
+            0x7F => {
+                // LD A, A (無動作)
+            }
+            0x6F => {
+                // LD L, A
+                self.registers.l = self.registers.a;
+            }
+            0x41 => {
+                // LD B, C
+                self.registers.b = self.registers.c;
+            }
+            0xBD => {
+                // CP L (比較A和L，設置標誌位)
+                let result = self.registers.a.wrapping_sub(self.registers.l);
+                self.registers.set_z_flag(result == 0);
+                self.registers.set_n_flag(true);
+                self.registers
+                    .set_h_flag((self.registers.a & 0x0F) < (self.registers.l & 0x0F));
+                self.registers
+                    .set_c_flag(self.registers.a < self.registers.l);
+            }
+            0x4A => {
+                // LD C, D
+                self.registers.c = self.registers.d;
+            }
             _ => println!("Opcode {:02X} not implemented", opcode),
-        }
-    }
-
-    // 必需的方法
-    pub fn get_enhanced_status_report(&self) -> String {
-        format!(
-            "CPU Status Report:\n\
-             PC: 0x{:04X}, A: 0x{:02X}, B: 0x{:02X}, C: 0x{:02X}\n\
-             D: 0x{:02X}, E: 0x{:02X}, H: 0x{:02X}, L: 0x{:02X}\n\
-             SP: 0x{:04X}, Instructions: {}",
-            self.registers.pc,
-            self.registers.a,
-            self.registers.b,
-            self.registers.c,
-            self.registers.d,
-            self.registers.e,
-            self.registers.h,
-            self.registers.l,
-            self.registers.sp,
-            self.instruction_count
-        )
-    }
-
-    pub fn simulate_hardware_state(&mut self) {
-        let ly_addr = 0xFF44;
-        let current_ly = self.mmu.read_byte(ly_addr);
-
-        if current_ly >= 153 {
-            self.mmu.write_byte(ly_addr, 0);
-        } else {
-            self.mmu.write_byte(ly_addr, current_ly + 1);
-        }
-
-        if current_ly == 144 {
-            let if_reg = self.mmu.read_byte(0xFF0F);
-            self.mmu.write_byte(0xFF0F, if_reg | 0x01);
-        }
-    }
-
-    pub fn is_in_wait_loop(&self) -> bool {
-        false
-    }
-
-    pub fn get_instruction_count(&self) -> u64 {
-        self.instruction_count
-    }
-    pub fn save_performance_report(&self) {
-        let report = format!(
-            "Performance Report:\n\
-             Total Instructions: {}\n\
-             PC: 0x{:04X}\n\
-             Registers: A={:02X} B={:02X} C={:02X} D={:02X} E={:02X} H={:02X} L={:02X}\n",
-            self.instruction_count,
-            self.registers.pc,
-            self.registers.a,
-            self.registers.b,
-            self.registers.c,
-            self.registers.d,
-            self.registers.e,
-            self.registers.h,
-            self.registers.l
-        );
-
-        if let Ok(mut file) = std::fs::File::create("debug_report/performance_report.txt") {
-            use std::io::Write;
-            let _ = file.write_all(report.as_bytes());
         }
     }
 }
