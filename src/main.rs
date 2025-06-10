@@ -49,9 +49,14 @@ fn main() {
     joypad.set_debug_mode(true);
     apu.set_debug_mode(true);
 
-    println!("系統組件初始化完成");
+    println!("系統組件初始化完成"); // 使用完整的 fallback ROM 而不是簡單的測試 ROM
+    println!("使用完整的 fallback ROM 來驗證 VRAM 初始化...");
+    // 不載入任何 ROM，讓 MMU 使用它的 fallback ROM
+    // cpu.load_rom(&test_rom); // 注釋掉這行，讓 MMU 自動使用 fallback ROM
+    println!("將使用 MMU 的 fallback ROM（包含完整的 VRAM 初始化代碼）");
 
-    // 載入實際 ROM 檔案
+    /*
+    // 原始 ROM 載入邏輯（暫時禁用）
     let rom_path = "rom.gb";
     match std::fs::read(rom_path) {
         Ok(rom_data) => {
@@ -76,7 +81,8 @@ fn main() {
             ];
             cpu.load_rom(&test_rom);
         }
-    } // 創建窗口
+    }
+    */// 創建窗口
     let mut window = Window::new("Game Boy 模擬器", 160, 144, WindowOptions::default()).unwrap();
     let mut frame_count = 0;
     let start_time = std::time::Instant::now();
