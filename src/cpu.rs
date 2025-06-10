@@ -141,8 +141,13 @@ impl CPU {
             } // LD A, n
             0x76 => { /* HALT (暫不處理) */ }
             0xAF => {
-                self.registers.a = 0;
-            } // XOR A
+                // XOR A (A = A ^ A)
+                self.registers.a ^= self.registers.a;
+                self.registers.set_z_flag(self.registers.a == 0);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag(false);
+                self.registers.set_c_flag(false);
+            }
             0xC3 => {
                 // JP nn
                 let lo = self.fetch() as u16;
@@ -175,15 +180,28 @@ impl CPU {
             }
             // 新增的指令實現
             0xA7 => {
-                // AND A (邏輯與 A 和 A，實際上就是測試 A 的值)
-                self.registers.a = self.registers.a & self.registers.a;
-                // 設置標誌位: Z=結果為0, N=0, H=1, C=0
+                // AND A (A = A & A)
+                self.registers.a &= self.registers.a;
+                self.registers.set_z_flag(self.registers.a == 0);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag(true);
+                self.registers.set_c_flag(false);
+            }
+            0x20 => {
+                // JR NZ, n (如果 Z 標誌未設置則相對跳轉)
+                let offset = self.fetch() as i8;
+                let z_flag = (self.registers.f & 0x80) != 0;
+                if !z_flag {
+                    self.registers.pc = ((self.registers.pc as i32) + (offset as i32)) as u16;
+                }
             }
             0x28 => {
                 // JR Z, n (如果 Z 標誌設置則相對跳轉)
-                let _offset = self.fetch() as i8;
-                // 暫時假設 Z=0，所以不跳轉
-                // TODO: 實現標誌位系統
+                let offset = self.fetch() as i8;
+                let z_flag = (self.registers.f & 0x80) != 0;
+                if z_flag {
+                    self.registers.pc = ((self.registers.pc as i32) + (offset as i32)) as u16;
+                }
             }
             0xFA => {
                 // LD A, (nn) (從記憶體地址 nn 載入到 A)
@@ -200,7 +218,13 @@ impl CPU {
             }
             0x85 => {
                 // ADD A, L (A = A + L)
-                self.registers.a = self.registers.a.wrapping_add(self.registers.l);
+                let (result, carry) = self.registers.a.overflowing_add(self.registers.l);
+                self.registers.set_z_flag(result == 0);
+                self.registers.set_n_flag(false);
+                self.registers
+                    .set_h_flag(((self.registers.a & 0xF) + (self.registers.l & 0xF)) > 0xF);
+                self.registers.set_c_flag(carry);
+                self.registers.a = result;
             }
             0x1D => {
                 // DEC E (E 暫存器減一)
@@ -210,15 +234,21 @@ impl CPU {
                 // JP C, nn (如果 C 標誌設置則跳轉)
                 let lo = self.fetch() as u16;
                 let hi = self.fetch() as u16;
-                let _addr = (hi << 8) | lo;
-                // 暫時假設 C=0，所以不跳轉
-                // TODO: 實現標誌位系統
+                let addr = (hi << 8) | lo;
+                let c_flag = (self.registers.f & 0x10) != 0;
+                if c_flag {
+                    self.registers.pc = addr;
+                }
             }
             0xFE => {
                 // CP n (比較 A 和立即數 n)
-                let _n = self.fetch();
-                // 執行 A - n 但不保存結果，只設置標誌位
-                // TODO: 實現標誌位系統
+                let n = self.fetch();
+                let result = self.registers.a.wrapping_sub(n);
+                self.registers.set_z_flag(result == 0);
+                self.registers.set_n_flag(true);
+                self.registers
+                    .set_h_flag((self.registers.a & 0xF) < (n & 0xF));
+                self.registers.set_c_flag(self.registers.a < n);
             }
             0x03 => {
                 // INC BC (BC 暫存器對增一)
@@ -315,10 +345,12 @@ impl CPU {
                 self.registers.l = hl as u8;
             }
             0xB1 => {
-                // OR C (邏輯或 A 和 C)
-                self.registers.a = self.registers.a | self.registers.c;
-                // 簡單的 Z 標誌設置：當結果為 0 時設置 Z 標誌
-                // TODO: 實現完整的標誌位系統
+                // OR C
+                self.registers.a |= self.registers.c;
+                self.registers.set_z_flag(self.registers.a == 0);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag(false);
+                self.registers.set_c_flag(false);
             }
             0xF3 => {
                 // DI (禁用中斷)
@@ -326,8 +358,11 @@ impl CPU {
             }
             0x24 => {
                 // INC H (H 暫存器加一)
+                let old = self.registers.h;
                 self.registers.h = self.registers.h.wrapping_add(1);
-                // TODO: 設置標誌位 Z, N=0, H
+                self.registers.set_z_flag(self.registers.h == 0);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag((old & 0xF) + 1 > 0xF);
             }
             0x4D => {
                 // LD C, L (將 L 暫存器的值載入 C)
@@ -359,7 +394,7 @@ impl CPU {
                 self.registers.pc = 0x38;
             }
             0xCF => {
-                // RST 08H (重置到地址 0x08)
+                // RST 08H (重置到 0x08)
                 // 將當前 PC 推入堆疊
                 self.registers.sp = self.registers.sp.wrapping_sub(1);
                 self.mmu
@@ -406,8 +441,13 @@ impl CPU {
             0xC6 => {
                 // ADD A, n
                 let n = self.fetch();
-                self.registers.a = self.registers.a.wrapping_add(n);
-                // TODO: 設置標誌位 Z, N=0, H, C
+                let (result, carry) = self.registers.a.overflowing_add(n);
+                self.registers.set_z_flag(result == 0);
+                self.registers.set_n_flag(false);
+                self.registers
+                    .set_h_flag(((self.registers.a & 0xF) + (n & 0xF)) > 0xF);
+                self.registers.set_c_flag(carry);
+                self.registers.a = result;
             }
             0x30 => {
                 // JR NC, n
@@ -452,8 +492,7 @@ impl CPU {
                 let lo = self.fetch() as u16;
                 let hi = self.fetch() as u16;
                 let addr = (hi << 8) | lo;
-                // TODO: 真正檢查 Z 標誌
-                let z_flag = false;
+                let z_flag = (self.registers.f & 0x80) != 0;
                 if z_flag {
                     self.registers.sp = self.registers.sp.wrapping_sub(1);
                     self.mmu
@@ -477,8 +516,11 @@ impl CPU {
             }
             0x1C => {
                 // INC E
+                let old = self.registers.e;
                 self.registers.e = self.registers.e.wrapping_add(1);
-                // TODO: 設置標誌位 Z, N=0, H
+                self.registers.set_z_flag(self.registers.e == 0);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag((old & 0xF) + 1 > 0xF);
             }
             0xD5 => {
                 // PUSH DE
@@ -583,8 +625,13 @@ impl CPU {
             }
             0x87 => {
                 // ADD A, A
-                self.registers.a = self.registers.a.wrapping_add(self.registers.a);
-                // TODO: 設置標誌位 Z, N=0, H, C
+                let (result, carry) = self.registers.a.overflowing_add(self.registers.a);
+                self.registers.set_z_flag(result == 0);
+                self.registers.set_n_flag(false);
+                self.registers
+                    .set_h_flag(((self.registers.a & 0xF) + (self.registers.a & 0xF)) > 0xF);
+                self.registers.set_c_flag(carry);
+                self.registers.a = result;
             }
             0x5F => {
                 // LD E, A
@@ -613,30 +660,98 @@ impl CPU {
                 // LD E, L
                 self.registers.e = self.registers.l;
             }
-            0x7F => {
-                // LD A, A (無動作)
+            0x0C => {
+                // INC C (C 暫存器加一)
+                let old = self.registers.c;
+                self.registers.c = self.registers.c.wrapping_add(1);
+                self.registers.set_z_flag(self.registers.c == 0);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag((old & 0xF) + 1 > 0xF);
             }
-            0x6F => {
-                // LD L, A
-                self.registers.l = self.registers.a;
+            0x2A => {
+                // LD A, (HL+) (A = (HL), HL++)
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.registers.a = self.mmu.read_byte(addr);
+                let hl = addr.wrapping_add(1);
+                self.registers.h = (hl >> 8) as u8;
+                self.registers.l = hl as u8;
             }
-            0x41 => {
-                // LD B, C
-                self.registers.b = self.registers.c;
+            0xE6 => {
+                // AND n (A = A & n)
+                let n = self.fetch();
+                self.registers.a &= n;
+                self.registers.set_z_flag(self.registers.a == 0);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag(true);
+                self.registers.set_c_flag(false);
             }
-            0xBD => {
-                // CP L (比較A和L，設置標誌位)
-                let result = self.registers.a.wrapping_sub(self.registers.l);
-                self.registers.set_z_flag(result == 0);
-                self.registers.set_n_flag(true);
+            0xCB => {
+                // CB 前綴指令集 (Bit操作/Shift/Rotate等)
+                let cb_opcode = self.fetch();
+                match cb_opcode {
+                    0x11 => {
+                        // RL C (C = (C << 1) | Carry)
+                        let old_carry = (self.registers.f & 0x10) != 0;
+                        let c = self.registers.c;
+                        let new_c = (c << 1) | if old_carry { 1 } else { 0 };
+                        self.registers.c = new_c;
+                        self.registers.set_z_flag(self.registers.c == 0);
+                        self.registers.set_n_flag(false);
+                        self.registers.set_h_flag(false);
+                        self.registers.set_c_flag((c & 0x80) != 0);
+                    }
+                    0x87 => {
+                        // RES 0, A (將 A 的 bit 0 清 0)
+                        self.registers.a &= !0x01;
+                        // RES 不影響標誌位
+                    }
+                    _ => println!("CB Opcode {:02X} not implemented", cb_opcode),
+                }
+            }
+            0x13 => {
+                // INC DE (DE 暫存器對增一)
+                let de = ((self.registers.d as u16) << 8) | (self.registers.e as u16);
+                let result = de.wrapping_add(1);
+                self.registers.d = (result >> 8) as u8;
+                self.registers.e = result as u8;
+            }
+            0x47 => {
+                // LD B, A
+                self.registers.b = self.registers.a;
+            }
+            0x07 => {
+                // RLCA (Rotate A left, old bit 7 to Carry and bit 0)
+                let a = self.registers.a;
+                let carry = (a & 0x80) != 0;
+                self.registers.a = (a << 1) | if carry { 1 } else { 0 };
+                self.registers.set_z_flag(false);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag(false);
+                self.registers.set_c_flag(carry);
+            }
+            0x09 => {
+                // ADD HL, BC
+                let hl = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                let bc = ((self.registers.b as u16) << 8) | (self.registers.c as u16);
+                let result = hl.wrapping_add(bc);
+                // H 標誌：如果低 12 位溢出
                 self.registers
-                    .set_h_flag((self.registers.a & 0x0F) < (self.registers.l & 0x0F));
-                self.registers
-                    .set_c_flag(self.registers.a < self.registers.l);
+                    .set_h_flag(((hl & 0x0FFF) + (bc & 0x0FFF)) > 0x0FFF);
+                // C 標誌：如果 16 位溢出
+                self.registers.set_c_flag(result < hl);
+                self.registers.set_n_flag(false);
+                // Z 標誌不變
+                self.registers.h = (result >> 8) as u8;
+                self.registers.l = result as u8;
             }
-            0x4A => {
-                // LD C, D
-                self.registers.c = self.registers.d;
+            0x12 => {
+                // LD (DE), A (將 A 的值寫入 DE 指向的記憶體)
+                let addr = ((self.registers.d as u16) << 8) | (self.registers.e as u16);
+                self.mmu.write_byte(addr, self.registers.a);
+            }
+            0xFB => {
+                // EI (啟用中斷，暫時可不實作副作用)
+                // TODO: 實現中斷啟用
             }
             _ => println!("Opcode {:02X} not implemented", opcode),
         }

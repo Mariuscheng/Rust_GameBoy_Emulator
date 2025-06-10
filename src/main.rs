@@ -78,6 +78,9 @@ fn main() {
     cpu.mmu.write_byte(0xFF40, 0x91);
     ppu.set_lcdc(0x91);
 
+    // 強制設置 BGP 為標準 Game Boy 色階
+    cpu.mmu.write_byte(0xFF47, 0xE4);
+
     let mut frame_count = 0;
     let mut cycle_count = 0;
 
