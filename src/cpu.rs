@@ -198,16 +198,6 @@ impl CPU {
                 let addr = 0xFF00 + self.registers.c as u16;
                 self.mmu.write_byte(addr, self.registers.a);
             }
-            0x85 => {
-                // ADD A, L (A = A + L)
-                let (result, carry) = self.registers.a.overflowing_add(self.registers.l);
-                self.registers.set_z_flag(result == 0);
-                self.registers.set_n_flag(false);
-                self.registers
-                    .set_h_flag(((self.registers.a & 0xF) + (self.registers.l & 0xF)) > 0xF);
-                self.registers.set_c_flag(carry);
-                self.registers.a = result;
-            }
             0x1D => {
                 // DEC E (E 暫存器減一)
                 self.registers.e = self.registers.e.wrapping_sub(1);
@@ -222,468 +212,860 @@ impl CPU {
                     self.registers.pc = addr;
                 }
             }
-            0xFE => {
-                // CP n (比較 A 和立即數 n)
-                let n = self.fetch();
-                let result = self.registers.a.wrapping_sub(n);
-                self.registers.set_z_flag(result == 0);
-                self.registers.set_n_flag(true);
-                self.registers
-                    .set_h_flag((self.registers.a & 0xF) < (n & 0xF));
-                self.registers.set_c_flag(self.registers.a < n);
-            }
-            0x03 => {
-                // INC BC (BC 暫存器對增一)
-                let bc = ((self.registers.b as u16) << 8) | (self.registers.c as u16);
-                let result = bc.wrapping_add(1);
-                self.registers.b = (result >> 8) as u8;
-                self.registers.c = result as u8;
-            }
-            0x0B => {
-                // DEC BC (BC 暫存器對減一)
-                let bc = ((self.registers.b as u16) << 8) | (self.registers.c as u16);
-                let result = bc.wrapping_sub(1);
-                self.registers.b = (result >> 8) as u8;
-                self.registers.c = result as u8;
-            }
-            0x0C => {
-                // INC C (C 暫存器加一)
-                self.registers.c = self.registers.c.wrapping_add(1);
-            }
-            0xEA => {
-                // LD (nn), A (將 A 儲存到記憶體地址 nn)
-                let lo = self.fetch() as u16;
-                let hi = self.fetch() as u16;
-                let addr = (hi << 8) | lo;
-                self.mmu.write_byte(addr, self.registers.a);
-            }
-            0xCD => {
-                // CALL nn (呼叫子程式)
-                let lo = self.fetch() as u16;
-                let hi = self.fetch() as u16;
-                let addr = (hi << 8) | lo;
-
-                // 將返回地址推入堆疊
-                self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu
-                    .write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
-                self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu
-                    .write_byte(self.registers.sp, self.registers.pc as u8);
-
-                // 跳轉到目標地址
-                self.registers.pc = addr;
-            }
-            0xF0 => {
-                // LDH A, (n) (從 0xFF00+n 載入到 A)
-                let n = self.fetch();
-                let addr = 0xFF00 + n as u16;
-                self.registers.a = self.mmu.read_byte(addr);
-            }
-            // 新增 fallback ROM 需要的指令
-            0x21 => {
-                // LD HL, nn (載入 16 位立即值到 HL)
-                let lo = self.fetch();
-                let hi = self.fetch();
-                self.registers.h = hi;
-                self.registers.l = lo;
-            }
-            0x01 => {
-                // LD BC, nn (載入 16 位立即值到 BC)
-                let lo = self.fetch();
-                let hi = self.fetch();
-                self.registers.b = hi;
-                self.registers.c = lo;
-            }
-            0x02 => {
-                // LD (BC), A
-                let addr = ((self.registers.b as u16) << 8) | (self.registers.c as u16);
-                self.mmu.write_byte(addr, self.registers.a);
-            }
-            0x0A => {
-                // LD A, (BC)
-                let addr = ((self.registers.b as u16) << 8) | (self.registers.c as u16);
-                self.registers.a = self.mmu.read_byte(addr);
-            }
-            0x12 => {
-                // LD (DE), A
-                let addr = ((self.registers.d as u16) << 8) | (self.registers.e as u16);
-                self.mmu.write_byte(addr, self.registers.a);
-            }
-            0x1A => {
-                // LD A, (DE)
-                let addr = ((self.registers.d as u16) << 8) | (self.registers.e as u16);
-                self.registers.a = self.mmu.read_byte(addr);
-            }
-            0x22 => {
-                // LD (HL+), A
-                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
-                self.mmu.write_byte(addr, self.registers.a);
-                let hl = addr.wrapping_add(1);
-                self.registers.h = (hl >> 8) as u8;
-                self.registers.l = hl as u8;
-            }
-            0x2A => {
-                // LD A, (HL+)
-                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
-                self.registers.a = self.mmu.read_byte(addr);
-                let hl = addr.wrapping_add(1);
-                self.registers.h = (hl >> 8) as u8;
-                self.registers.l = hl as u8;
-            }
-            0x32 => {
-                // LD (HL-), A
-                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
-                self.mmu.write_byte(addr, self.registers.a);
-                let hl = addr.wrapping_sub(1);
-                self.registers.h = (hl >> 8) as u8;
-                self.registers.l = hl as u8;
-            }
-            0x3A => {
-                // LD A, (HL-)
-                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
-                self.registers.a = self.mmu.read_byte(addr);
-                let hl = addr.wrapping_sub(1);
-                self.registers.h = (hl >> 8) as u8;
-                self.registers.l = hl as u8;
-            }
-            // 8-bit LD r,r' (0x40~0x7F) 合併去重，確保只出現一次
-            0x40 => { /* LD B,B */ }
+            // 8-bit LD r, r' 指令 (0x40~0x7F)
+            0x40 => {
+                self.registers.b = self.registers.b;
+            } // LD B,B
             0x41 => {
                 self.registers.b = self.registers.c;
-            }
+            } // LD B,C
             0x42 => {
                 self.registers.b = self.registers.d;
-            }
+            } // LD B,D
             0x43 => {
                 self.registers.b = self.registers.e;
-            }
+            } // LD B,E
             0x44 => {
                 self.registers.b = self.registers.h;
-            }
+            } // LD B,H
             0x45 => {
                 self.registers.b = self.registers.l;
-            }
+            } // LD B,L
             0x46 => {
                 let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
                 self.registers.b = self.mmu.read_byte(addr);
-            }
+            } // LD B,(HL)
             0x47 => {
                 self.registers.b = self.registers.a;
-            }
+            } // LD B,A
             0x48 => {
                 self.registers.c = self.registers.b;
-            }
-            0x49 => { /* LD C,C */ }
+            } // LD C,B
+            0x49 => {
+                self.registers.c = self.registers.c;
+            } // LD C,C
             0x4A => {
                 self.registers.c = self.registers.d;
-            }
+            } // LD C,D
             0x4B => {
                 self.registers.c = self.registers.e;
-            }
+            } // LD C,E
             0x4C => {
                 self.registers.c = self.registers.h;
-            }
+            } // LD C,H
             0x4D => {
                 self.registers.c = self.registers.l;
-            }
+            } // LD C,L
             0x4E => {
                 let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
                 self.registers.c = self.mmu.read_byte(addr);
-            }
+            } // LD C,(HL)
             0x4F => {
                 self.registers.c = self.registers.a;
-            }
+            } // LD C,A
             0x50 => {
                 self.registers.d = self.registers.b;
-            }
+            } // LD D,B
             0x51 => {
                 self.registers.d = self.registers.c;
-            }
-            0x52 => { /* LD D,D */ }
+            } // LD D,C
+            0x52 => {
+                self.registers.d = self.registers.d;
+            } // LD D,D
             0x53 => {
                 self.registers.d = self.registers.e;
-            }
+            } // LD D,E
             0x54 => {
                 self.registers.d = self.registers.h;
-            }
+            } // LD D,H
             0x55 => {
                 self.registers.d = self.registers.l;
-            }
+            } // LD D,L
             0x56 => {
                 let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
                 self.registers.d = self.mmu.read_byte(addr);
-            }
+            } // LD D,(HL)
             0x57 => {
                 self.registers.d = self.registers.a;
-            }
+            } // LD D,A
             0x58 => {
                 self.registers.e = self.registers.b;
-            }
+            } // LD E,B
             0x59 => {
                 self.registers.e = self.registers.c;
-            }
+            } // LD E,C
             0x5A => {
                 self.registers.e = self.registers.d;
-            }
-            0x5B => { /* LD E,E */ }
+            } // LD E,D
+            0x5B => {
+                self.registers.e = self.registers.e;
+            } // LD E,E
             0x5C => {
                 self.registers.e = self.registers.h;
-            }
+            } // LD E,H
             0x5D => {
                 self.registers.e = self.registers.l;
-            }
+            } // LD E,L
             0x5E => {
                 let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
                 self.registers.e = self.mmu.read_byte(addr);
-            }
+            } // LD E,(HL)
             0x5F => {
                 self.registers.e = self.registers.a;
-            }
+            } // LD E,A
             0x60 => {
                 self.registers.h = self.registers.b;
-            }
+            } // LD H,B
             0x61 => {
                 self.registers.h = self.registers.c;
-            }
+            } // LD H,C
             0x62 => {
                 self.registers.h = self.registers.d;
-            }
+            } // LD H,D
             0x63 => {
                 self.registers.h = self.registers.e;
-            }
-            0x64 => { /* LD H,H */ }
+            } // LD H,E
+            0x64 => {
+                self.registers.h = self.registers.h;
+            } // LD H,H
             0x65 => {
                 self.registers.h = self.registers.l;
-            }
+            } // LD H,L
             0x66 => {
                 let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
                 self.registers.h = self.mmu.read_byte(addr);
-            }
+            } // LD H,(HL)
             0x67 => {
                 self.registers.h = self.registers.a;
-            }
+            } // LD H,A
             0x68 => {
                 self.registers.l = self.registers.b;
-            }
+            } // LD L,B
             0x69 => {
                 self.registers.l = self.registers.c;
-            }
+            } // LD L,C
             0x6A => {
                 self.registers.l = self.registers.d;
-            }
+            } // LD L,D
             0x6B => {
                 self.registers.l = self.registers.e;
-            }
+            } // LD L,E
             0x6C => {
                 self.registers.l = self.registers.h;
-            }
-            0x6D => { /* LD L,L */ }
+            } // LD L,H
+            0x6D => {
+                self.registers.l = self.registers.l;
+            } // LD L,L
             0x6E => {
                 let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
                 self.registers.l = self.mmu.read_byte(addr);
-            }
+            } // LD L,(HL)
             0x6F => {
                 self.registers.l = self.registers.a;
-            }
+            } // LD L,A
             0x70 => {
                 let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
                 self.mmu.write_byte(addr, self.registers.b);
-            }
+            } // LD (HL),B
             0x71 => {
                 let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
                 self.mmu.write_byte(addr, self.registers.c);
-            }
+            } // LD (HL),C
             0x72 => {
                 let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
                 self.mmu.write_byte(addr, self.registers.d);
-            }
+            } // LD (HL),D
             0x73 => {
                 let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
                 self.mmu.write_byte(addr, self.registers.e);
-            }
+            } // LD (HL),E
             0x74 => {
                 let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
                 self.mmu.write_byte(addr, self.registers.h);
-            }
+            } // LD (HL),H
             0x75 => {
                 let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
                 self.mmu.write_byte(addr, self.registers.l);
-            }
+            } // LD (HL),L
+            0x76 => { /* HALT */ } // HALT
             0x77 => {
                 let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
                 self.mmu.write_byte(addr, self.registers.a);
-            }
-            // 0x78~0x7F 的 LD 指令
+            } // LD (HL),A
             0x78 => {
                 self.registers.a = self.registers.b;
-            }
+            } // LD A,B
             0x79 => {
                 self.registers.a = self.registers.c;
-            }
+            } // LD A,C
             0x7A => {
                 self.registers.a = self.registers.d;
-            }
+            } // LD A,D
             0x7B => {
                 self.registers.a = self.registers.e;
-            }
+            } // LD A,E
             0x7C => {
                 self.registers.a = self.registers.h;
-            }
+            } // LD A,H
             0x7D => {
                 self.registers.a = self.registers.l;
-            }
+            } // LD A,L
             0x7E => {
                 let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
                 self.registers.a = self.mmu.read_byte(addr);
-            }
-            0x7F => { /* LD A, A */ }
-            // ALU 指令
+            } // LD A,(HL)
+            0x7F => {
+                self.registers.a = self.registers.a;
+            } // LD A,A
+            // 8-bit ALU 指令 (ADD/ADC/SUB/SBC/AND/OR/XOR/CP)
+            0x80 => {
+                self.alu_add(self.registers.b);
+            } // ADD A,B
+            0x81 => {
+                self.alu_add(self.registers.c);
+            } // ADD A,C
+            0x82 => {
+                self.alu_add(self.registers.d);
+            } // ADD A,D
+            0x83 => {
+                self.alu_add(self.registers.e);
+            } // ADD A,E
+            0x84 => {
+                self.alu_add(self.registers.h);
+            } // ADD A,H
+            0x85 => {
+                self.alu_add(self.registers.l);
+            } // ADD A,L
+            0x86 => {
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.alu_add(self.mmu.read_byte(addr));
+            } // ADD A,(HL)
             0x87 => {
-                // ADD A, A
-                let (result, carry) = self.registers.a.overflowing_add(self.registers.a);
-                self.registers.set_z_flag(result == 0);
-                self.registers.set_n_flag(false);
-                self.registers
-                    .set_h_flag(((self.registers.a & 0xF) + (self.registers.a & 0xF)) > 0xF);
-                self.registers.set_c_flag(carry);
-                self.registers.a = result;
-            }
+                self.alu_add(self.registers.a);
+            } // ADD A,A
+            0x88 => {
+                self.alu_adc(self.registers.b);
+            } // ADC A,B
+            0x89 => {
+                self.alu_adc(self.registers.c);
+            } // ADC A,C
+            0x8A => {
+                self.alu_adc(self.registers.d);
+            } // ADC A,D
+            0x8B => {
+                self.alu_adc(self.registers.e);
+            } // ADC A,E
+            0x8C => {
+                self.alu_adc(self.registers.h);
+            } // ADC A,H
+            0x8D => {
+                self.alu_adc(self.registers.l);
+            } // ADC A,L
+            0x8E => {
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.alu_adc(self.mmu.read_byte(addr));
+            } // ADC A,(HL)
+            0x8F => {
+                self.alu_adc(self.registers.a);
+            } // ADC A,A
+            0x90 => {
+                self.alu_sub(self.registers.b);
+            } // SUB B
+            0x91 => {
+                self.alu_sub(self.registers.c);
+            } // SUB C
+            0x92 => {
+                self.alu_sub(self.registers.d);
+            } // SUB D
+            0x93 => {
+                self.alu_sub(self.registers.e);
+            } // SUB E
+            0x94 => {
+                self.alu_sub(self.registers.h);
+            } // SUB H
+            0x95 => {
+                self.alu_sub(self.registers.l);
+            } // SUB L
+            0x96 => {
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.alu_sub(self.mmu.read_byte(addr));
+            } // SUB (HL)
+            0x97 => {
+                self.alu_sub(self.registers.a);
+            } // SUB A
+            0x98 => {
+                self.alu_sbc(self.registers.b);
+            } // SBC A,B
+            0x99 => {
+                self.alu_sbc(self.registers.c);
+            } // SBC A,C
+            0x9A => {
+                self.alu_sbc(self.registers.d);
+            } // SBC A,D
+            0x9B => {
+                self.alu_sbc(self.registers.e);
+            } // SBC A,E
+            0x9C => {
+                self.alu_sbc(self.registers.h);
+            } // SBC A,H
+            0x9D => {
+                self.alu_sbc(self.registers.l);
+            } // SBC A,L
+            0x9E => {
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.alu_sbc(self.mmu.read_byte(addr));
+            } // SBC A,(HL)
+            0x9F => {
+                self.alu_sbc(self.registers.a);
+            } // SBC A,A
+            0xA0 => {
+                self.alu_and(self.registers.b);
+            } // AND B
+            0xA1 => {
+                self.alu_and(self.registers.c);
+            } // AND C
+            0xA2 => {
+                self.alu_and(self.registers.d);
+            } // AND D
+            0xA3 => {
+                self.alu_and(self.registers.e);
+            } // AND E
+            0xA4 => {
+                self.alu_and(self.registers.h);
+            } // AND H
+            0xA5 => {
+                self.alu_and(self.registers.l);
+            } // AND L
+            0xA6 => {
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.alu_and(self.mmu.read_byte(addr));
+            } // AND (HL)
+            0xA7 => {
+                self.alu_and(self.registers.a);
+            } // AND A
+            0xA8 => {
+                self.alu_xor(self.registers.b);
+            } // XOR B
+            0xA9 => {
+                self.alu_xor(self.registers.c);
+            } // XOR C
+            0xAA => {
+                self.alu_xor(self.registers.d);
+            } // XOR D
+            0xAB => {
+                self.alu_xor(self.registers.e);
+            } // XOR E
+            0xAC => {
+                self.alu_xor(self.registers.h);
+            } // XOR H
+            0xAD => {
+                self.alu_xor(self.registers.l);
+            } // XOR L
+            0xAE => {
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.alu_xor(self.mmu.read_byte(addr));
+            } // XOR (HL)
+            0xAF => {
+                self.alu_xor(self.registers.a);
+            } // XOR A
             0xB0 => {
-                // OR B
-                self.registers.a |= self.registers.b;
-                self.registers.set_z_flag(self.registers.a == 0);
-                self.registers.set_n_flag(false);
-                self.registers.set_h_flag(false);
-                self.registers.set_c_flag(false);
-            }
+                self.alu_or(self.registers.b);
+            } // OR B
             0xB1 => {
-                // OR C
-                self.registers.a |= self.registers.c;
-                self.registers.set_z_flag(self.registers.a == 0);
-                self.registers.set_n_flag(false);
-                self.registers.set_h_flag(false);
-                self.registers.set_c_flag(false);
-            }
-            0xE6 => {
-                // AND n
-                let n = self.fetch();
-                self.registers.a &= n;
-                self.registers.set_z_flag(self.registers.a == 0);
-                self.registers.set_n_flag(false);
-                self.registers.set_h_flag(true);
-                self.registers.set_c_flag(false);
-            }
-            0x13 => {
-                // INC DE
-                let de = ((self.registers.d as u16) << 8) | (self.registers.e as u16);
-                let result = de.wrapping_add(1);
-                self.registers.d = (result >> 8) as u8;
-                self.registers.e = result as u8;
-            }
-            0x09 => {
-                // ADD HL, BC
-                let hl = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
-                let bc = ((self.registers.b as u16) << 8) | (self.registers.c as u16);
-                let (result, carry) = hl.overflowing_add(bc);
-                self.registers.h = (result >> 8) as u8;
-                self.registers.l = result as u8;
-                self.registers.set_n_flag(false);
-                self.registers
-                    .set_h_flag(((hl & 0xFFF) + (bc & 0xFFF)) > 0xFFF);
-                self.registers.set_c_flag(carry);
-            }
-            0xF5 => {
-                // PUSH AF
-                self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu.write_byte(self.registers.sp, self.registers.a);
-                self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu.write_byte(self.registers.sp, self.registers.f);
-            }
-            0xF1 => {
-                // POP AF
-                self.registers.f = self.mmu.read_byte(self.registers.sp);
-                self.registers.sp = self.registers.sp.wrapping_add(1);
-                self.registers.a = self.mmu.read_byte(self.registers.sp);
-                self.registers.sp = self.registers.sp.wrapping_add(1);
-            }
-            0x3F => {
-                // CCF
-                let c = (self.registers.f & 0x10) != 0;
-                self.registers.set_n_flag(false);
-                self.registers.set_h_flag(false);
-                self.registers.set_c_flag(!c);
-            }
-            0x07 => {
-                // RLCA
-                let c = (self.registers.a & 0x80) != 0;
-                self.registers.a = self.registers.a.rotate_left(1);
-                self.registers.set_z_flag(false);
-                self.registers.set_n_flag(false);
-                self.registers.set_h_flag(false);
-                self.registers.set_c_flag(c);
-            }
-            0xC9 => {
-                // RET
-                let lo = self.mmu.read_byte(self.registers.sp) as u16;
-                self.registers.sp = self.registers.sp.wrapping_add(1);
-                let hi = self.mmu.read_byte(self.registers.sp) as u16;
-                self.registers.sp = self.registers.sp.wrapping_add(1);
-                self.registers.pc = (hi << 8) | lo;
-            }
+                self.alu_or(self.registers.c);
+            } // OR C
+            0xB2 => {
+                self.alu_or(self.registers.d);
+            } // OR D
+            0xB3 => {
+                self.alu_or(self.registers.e);
+            } // OR E
+            0xB4 => {
+                self.alu_or(self.registers.h);
+            } // OR H
+            0xB5 => {
+                self.alu_or(self.registers.l);
+            } // OR L
+            0xB6 => {
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.alu_or(self.mmu.read_byte(addr));
+            } // OR (HL)
+            0xB7 => {
+                self.alu_or(self.registers.a);
+            } // OR A
+            0xB8 => {
+                self.alu_cp(self.registers.b);
+            } // CP B
+            0xB9 => {
+                self.alu_cp(self.registers.c);
+            } // CP C
+            0xBA => {
+                self.alu_cp(self.registers.d);
+            } // CP D
+            0xBB => {
+                self.alu_cp(self.registers.e);
+            } // CP E
+            0xBC => {
+                self.alu_cp(self.registers.h);
+            } // CP H
+            0xBD => {
+                self.alu_cp(self.registers.l);
+            } // CP L
+            0xBE => {
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.alu_cp(self.mmu.read_byte(addr));
+            } // CP (HL)
+            0xBF => {
+                self.alu_cp(self.registers.a);
+            } // CP A
+            // 0xCB 前綴指令建議分開補齊，避免 match 過大
             0xCB => {
-                // CB 前綴指令
                 let cb_opcode = self.fetch();
                 match cb_opcode {
+                    // RLC r
+                    0x00 => {
+                        self.registers.b = self.rlc(self.registers.b);
+                    }
+                    0x01 => {
+                        self.registers.c = self.rlc(self.registers.c);
+                    }
+                    0x02 => {
+                        self.registers.d = self.rlc(self.registers.d);
+                    }
+                    0x03 => {
+                        self.registers.e = self.rlc(self.registers.e);
+                    }
+                    0x04 => {
+                        self.registers.h = self.rlc(self.registers.h);
+                    }
+                    0x05 => {
+                        self.registers.l = self.rlc(self.registers.l);
+                    }
+                    0x06 => {
+                        let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                        let v = self.mmu.read_byte(addr);
+                        let r = self.rlc(v);
+                        self.mmu.write_byte(addr, r);
+                    }
+                    0x07 => {
+                        self.registers.a = self.rlc(self.registers.a);
+                    }
+                    // RRC r
+                    0x08 => {
+                        self.registers.b = self.rrc(self.registers.b);
+                    }
+                    0x09 => {
+                        self.registers.c = self.rrc(self.registers.c);
+                    }
+                    0x0A => {
+                        self.registers.d = self.rrc(self.registers.d);
+                    }
+                    0x0B => {
+                        self.registers.e = self.rrc(self.registers.e);
+                    }
+                    0x0C => {
+                        self.registers.h = self.rrc(self.registers.h);
+                    }
+                    0x0D => {
+                        self.registers.l = self.rrc(self.registers.l);
+                    }
+                    0x0E => {
+                        let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                        let v = self.mmu.read_byte(addr);
+                        let r = self.rrc(v);
+                        self.mmu.write_byte(addr, r);
+                    }
+                    0x0F => {
+                        self.registers.a = self.rrc(self.registers.a);
+                    }
+                    // RL r
+                    0x10 => {
+                        self.registers.b = self.rl(self.registers.b);
+                    }
                     0x11 => {
-                        // RL C
-                        let c = self.registers.c;
-                        let carry = (self.registers.f & 0x10) != 0;
-                        let new_c = (c << 1) | if carry { 1 } else { 0 };
-                        self.registers.c = new_c;
-                        self.registers.set_z_flag(new_c == 0);
+                        self.registers.c = self.rl(self.registers.c);
+                    }
+                    0x12 => {
+                        self.registers.d = self.rl(self.registers.d);
+                    }
+                    0x13 => {
+                        self.registers.e = self.rl(self.registers.e);
+                    }
+                    0x14 => {
+                        self.registers.h = self.rl(self.registers.h);
+                    }
+                    0x15 => {
+                        self.registers.l = self.rl(self.registers.l);
+                    }
+                    0x16 => {
+                        let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                        let v = self.mmu.read_byte(addr);
+                        let r = self.rl(v);
+                        self.mmu.write_byte(addr, r);
+                    }
+                    0x17 => {
+                        self.registers.a = self.rl(self.registers.a);
+                    }
+                    // RR r
+                    0x18 => {
+                        self.registers.b = self.rr(self.registers.b);
+                    }
+                    0x19 => {
+                        self.registers.c = self.rr(self.registers.c);
+                    }
+                    0x1A => {
+                        self.registers.d = self.rr(self.registers.d);
+                    }
+                    0x1B => {
+                        self.registers.e = self.rr(self.registers.e);
+                    }
+                    0x1C => {
+                        self.registers.h = self.rr(self.registers.h);
+                    }
+                    0x1D => {
+                        self.registers.l = self.rr(self.registers.l);
+                    }
+                    0x1E => {
+                        let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                        let v = self.mmu.read_byte(addr);
+                        let r = self.rr(v);
+                        self.mmu.write_byte(addr, r);
+                    }
+                    0x1F => {
+                        self.registers.a = self.rr(self.registers.a);
+                    }
+                    // SLA r
+                    0x20 => {
+                        self.registers.b = self.sla(self.registers.b);
+                    }
+                    0x21 => {
+                        self.registers.c = self.sla(self.registers.c);
+                    }
+                    0x22 => {
+                        self.registers.d = self.sla(self.registers.d);
+                    }
+                    0x23 => {
+                        self.registers.e = self.sla(self.registers.e);
+                    }
+                    0x24 => {
+                        self.registers.h = self.sla(self.registers.h);
+                    }
+                    0x25 => {
+                        self.registers.l = self.sla(self.registers.l);
+                    }
+                    0x26 => {
+                        let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                        let v = self.mmu.read_byte(addr);
+                        let r = self.sla(v);
+                        self.mmu.write_byte(addr, r);
+                    }
+                    0x27 => {
+                        self.registers.a = self.sla(self.registers.a);
+                    }
+                    // SRA r
+                    0x28 => {
+                        self.registers.b = self.sra(self.registers.b);
+                    }
+                    0x29 => {
+                        self.registers.c = self.sra(self.registers.c);
+                    }
+                    0x2A => {
+                        self.registers.d = self.sra(self.registers.d);
+                    }
+                    0x2B => {
+                        self.registers.e = self.sra(self.registers.e);
+                    }
+                    0x2C => {
+                        self.registers.h = self.sra(self.registers.h);
+                    }
+                    0x2D => {
+                        self.registers.l = self.sra(self.registers.l);
+                    }
+                    0x2E => {
+                        let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                        let v = self.mmu.read_byte(addr);
+                        let r = self.sra(v);
+                        self.mmu.write_byte(addr, r);
+                    }
+                    0x2F => {
+                        self.registers.a = self.sra(self.registers.a);
+                    }
+                    // SWAP r
+                    0x30 => {
+                        self.registers.b = self.swap(self.registers.b);
+                    }
+                    0x31 => {
+                        self.registers.c = self.swap(self.registers.c);
+                    }
+                    0x32 => {
+                        self.registers.d = self.swap(self.registers.d);
+                    }
+                    0x33 => {
+                        self.registers.e = self.swap(self.registers.e);
+                    }
+                    0x34 => {
+                        self.registers.h = self.swap(self.registers.h);
+                    }
+                    0x35 => {
+                        self.registers.l = self.swap(self.registers.l);
+                    }
+                    0x36 => {
+                        let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                        let v = self.mmu.read_byte(addr);
+                        let r = self.swap(v);
+                        self.mmu.write_byte(addr, r);
+                    }
+                    0x37 => {
+                        self.registers.a = self.swap(self.registers.a);
+                    }
+                    // SRL r
+                    0x38 => {
+                        self.registers.b = self.srl(self.registers.b);
+                    }
+                    0x39 => {
+                        self.registers.c = self.srl(self.registers.c);
+                    }
+                    0x3A => {
+                        self.registers.d = self.srl(self.registers.d);
+                    }
+                    0x3B => {
+                        self.registers.e = self.srl(self.registers.e);
+                    }
+                    0x3C => {
+                        self.registers.h = self.srl(self.registers.h);
+                    }
+                    0x3D => {
+                        self.registers.l = self.srl(self.registers.l);
+                    }
+                    0x3E => {
+                        let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                        let v = self.mmu.read_byte(addr);
+                        let r = self.srl(v);
+                        self.mmu.write_byte(addr, r);
+                    }
+                    0x3F => {
+                        self.registers.a = self.srl(self.registers.a);
+                    }
+                    // BIT/RES/SET
+                    // BIT b, r
+                    0x40..=0x7F => {
+                        let bit = (cb_opcode - 0x40) / 8;
+                        let reg = (cb_opcode - 0x40) % 8;
+                        let value = match reg {
+                            0 => self.registers.b,
+                            1 => self.registers.c,
+                            2 => self.registers.d,
+                            3 => self.registers.e,
+                            4 => self.registers.h,
+                            5 => self.registers.l,
+                            6 => {
+                                let addr =
+                                    ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                                self.mmu.read_byte(addr)
+                            }
+                            7 => self.registers.a,
+                            _ => 0,
+                        };
+                        let z = (value & (1 << bit)) == 0;
+                        self.registers.set_z_flag(z);
                         self.registers.set_n_flag(false);
-                        self.registers.set_h_flag(false);
-                        self.registers.set_c_flag((c & 0x80) != 0);
+                        self.registers.set_h_flag(true);
                     }
-                    0x87 => {
-                        // RES 0, A
-                        self.registers.a &= !(1 << 0);
+                    // RES b, r
+                    0x80..=0xBF => {
+                        let bit = (cb_opcode - 0x80) / 8;
+                        let reg = (cb_opcode - 0x80) % 8;
+                        match reg {
+                            0 => self.registers.b &= !(1 << bit),
+                            1 => self.registers.c &= !(1 << bit),
+                            2 => self.registers.d &= !(1 << bit),
+                            3 => self.registers.e &= !(1 << bit),
+                            4 => self.registers.h &= !(1 << bit),
+                            5 => self.registers.l &= !(1 << bit),
+                            6 => {
+                                let addr =
+                                    ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                                let v = self.mmu.read_byte(addr) & !(1 << bit);
+                                self.mmu.write_byte(addr, v);
+                            }
+                            7 => self.registers.a &= !(1 << bit),
+                            _ => {}
+                        }
                     }
-                    _ => {
-                        println!("未處理的 CB 指令: 0x{:02X}", cb_opcode);
+                    // SET b, r
+                    0xC0..=0xFF => {
+                        let bit = (cb_opcode - 0xC0) / 8;
+                        let reg = (cb_opcode - 0xC0) % 8;
+                        match reg {
+                            0 => self.registers.b |= 1 << bit,
+                            1 => self.registers.c |= 1 << bit,
+                            2 => self.registers.d |= 1 << bit,
+                            3 => self.registers.e |= 1 << bit,
+                            4 => self.registers.h |= 1 << bit,
+                            5 => self.registers.l |= 1 << bit,
+                            6 => {
+                                let addr =
+                                    ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                                let v = self.mmu.read_byte(addr) | (1 << bit);
+                                self.mmu.write_byte(addr, v);
+                            }
+                            7 => self.registers.a |= 1 << bit,
+                            _ => {}
+                        }
                     }
+                    _ => { /* 不用的 CB 指令可註解或保留 */ }
                 }
-            }
-            0x31 => {
-                // LD SP, nn
-                let lo = self.fetch() as u16;
-                let hi = self.fetch() as u16;
-                self.registers.sp = (hi << 8) | lo;
-            }
-            0xCF => {
-                // RST 08H
-                self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu
-                    .write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
-                self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu
-                    .write_byte(self.registers.sp, self.registers.pc as u8);
-                self.registers.pc = 0x0008;
-            }
-            0xFF => {
-                // RST 38H
-                self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu
-                    .write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
-                self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu
-                    .write_byte(self.registers.sp, self.registers.pc as u8);
-                self.registers.pc = 0x0038;
             }
             _ => {
                 println!("未處理的指令: 0x{:02X}", opcode);
             }
         } // match 結尾
     } // decode_and_execute 結尾
+
+    // ALU 輔助方法
+    fn alu_add(&mut self, v: u8) {
+        let (result, carry) = self.registers.a.overflowing_add(v);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers
+            .set_h_flag(((self.registers.a & 0xF) + (v & 0xF)) > 0xF);
+        self.registers.set_c_flag(carry);
+        self.registers.a = result;
+    }
+    fn alu_adc(&mut self, v: u8) {
+        let c = if (self.registers.f & 0x10) != 0 { 1 } else { 0 };
+        let (sum1, carry1) = self.registers.a.overflowing_add(v);
+        let (result, carry2) = sum1.overflowing_add(c);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers
+            .set_h_flag(((self.registers.a & 0xF) + (v & 0xF) + c) > 0xF);
+        self.registers.set_c_flag(carry1 || carry2);
+        self.registers.a = result;
+    }
+    fn alu_sub(&mut self, v: u8) {
+        let (result, borrow) = self.registers.a.overflowing_sub(v);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(true);
+        self.registers
+            .set_h_flag((self.registers.a & 0xF) < (v & 0xF));
+        self.registers.set_c_flag(borrow);
+        self.registers.a = result;
+    }
+    fn alu_sbc(&mut self, v: u8) {
+        let c = if (self.registers.f & 0x10) != 0 { 1 } else { 0 };
+        let (sub1, borrow1) = self.registers.a.overflowing_sub(v);
+        let (result, borrow2) = sub1.overflowing_sub(c);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(true);
+        self.registers
+            .set_h_flag((self.registers.a & 0xF) < ((v & 0xF) + c));
+        self.registers.set_c_flag(borrow1 || borrow2);
+        self.registers.a = result;
+    }
+    fn alu_and(&mut self, v: u8) {
+        self.registers.a &= v;
+        self.registers.set_z_flag(self.registers.a == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(true);
+        self.registers.set_c_flag(false);
+    }
+    fn alu_or(&mut self, v: u8) {
+        self.registers.a |= v;
+        self.registers.set_z_flag(self.registers.a == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag(false);
+    }
+    fn alu_xor(&mut self, v: u8) {
+        self.registers.a ^= v;
+        self.registers.set_z_flag(self.registers.a == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag(false);
+    }
+    fn alu_cp(&mut self, v: u8) {
+        let (result, borrow) = self.registers.a.overflowing_sub(v);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(true);
+        self.registers
+            .set_h_flag((self.registers.a & 0xF) < (v & 0xF));
+        self.registers.set_c_flag(borrow);
+    }
+
+    // CB 前綴指令輔助方法
+    fn rlc(&mut self, v: u8) -> u8 {
+        let c = (v & 0x80) != 0;
+        let result = v.rotate_left(1);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag(c);
+        result
+    }
+    fn rrc(&mut self, v: u8) -> u8 {
+        let c = (v & 0x01) != 0;
+        let result = v.rotate_right(1);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag(c);
+        result
+    }
+    fn rl(&mut self, v: u8) -> u8 {
+        let c = (self.registers.f & 0x10) != 0;
+        let new_carry = (v & 0x80) != 0;
+        let result = (v << 1) | if c { 1 } else { 0 };
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag(new_carry);
+        result
+    }
+    fn rr(&mut self, v: u8) -> u8 {
+        let c = (self.registers.f & 0x10) != 0;
+        let new_carry = (v & 0x01) != 0;
+        let result = (v >> 1) | if c { 0x80 } else { 0 };
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag(new_carry);
+        result
+    }
+    fn sla(&mut self, v: u8) -> u8 {
+        let c = (v & 0x80) != 0;
+        let result = v << 1;
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag(c);
+        result
+    }
+    fn sra(&mut self, v: u8) -> u8 {
+        let c = (v & 0x01) != 0;
+        let msb = v & 0x80;
+        let result = (v >> 1) | msb;
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag(c);
+        result
+    }
+    fn swap(&mut self, v: u8) -> u8 {
+        let result = (v >> 4) | (v << 4);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag(false);
+        result
+    }
+    fn srl(&mut self, v: u8) -> u8 {
+        let c = (v & 0x01) != 0;
+        let result = v >> 1;
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag(c);
+        result
+    }
 }
