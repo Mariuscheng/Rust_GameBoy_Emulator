@@ -1,4 +1,0 @@
-Performance Report:
-Total Instructions: 674000
-PC: 0x4A0C
-Registers: A=00 B=00 C=02 D=00 E=00 H=00 L=00
