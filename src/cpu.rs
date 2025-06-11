@@ -1,38 +1,48 @@
+// Game Boy CPU 模擬器 - 修復版本
 use crate::mmu::MMU;
 
-// 標誌位常量
-const FLAG_Z: u8 = 0b10000000; // Zero flag
-const FLAG_N: u8 = 0b01000000; // Subtract flag
-const FLAG_H: u8 = 0b00100000; // Half carry flag
-const FLAG_C: u8 = 0b00010000; // Carry flag
-
-#[allow(dead_code)]
+#[derive(Default)]
 pub struct Registers {
     pub a: u8,
     pub b: u8,
     pub c: u8,
     pub d: u8,
     pub e: u8,
-    pub f: u8, // 標誌位寄存器 (Z, N, H, C flags)
     pub h: u8,
     pub l: u8,
-    pub sp: u16,
     pub pc: u16,
+    pub sp: u16,
+    pub f: u8, // 標誌位暫存器
 }
 
-impl Default for Registers {
-    fn default() -> Self {
-        Registers {
-            a: 0,
-            b: 0,
-            c: 0,
-            d: 0,
-            e: 0,
-            f: 0,
-            h: 0,
-            l: 0,
-            sp: 0,
-            pc: 0,
+impl Registers {
+    // 標誌位操作
+    pub fn set_z_flag(&mut self, value: bool) {
+        if value {
+            self.f |= 0x80;
+        } else {
+            self.f &= !0x80;
+        }
+    }
+    pub fn set_n_flag(&mut self, value: bool) {
+        if value {
+            self.f |= 0x40;
+        } else {
+            self.f &= !0x40;
+        }
+    }
+    pub fn set_h_flag(&mut self, value: bool) {
+        if value {
+            self.f |= 0x20;
+        } else {
+            self.f &= !0x20;
+        }
+    }
+    pub fn set_c_flag(&mut self, value: bool) {
+        if value {
+            self.f |= 0x10;
+        } else {
+            self.f &= !0x10;
         }
     }
 }
@@ -40,45 +50,172 @@ impl Default for Registers {
 pub struct CPU {
     pub registers: Registers,
     pub mmu: MMU,
-    pub dec_b_count: u32,     // 追蹤連續的DEC B執行次數
-    pub loop_detection: bool, // 是否啟用循環檢測
+    instruction_count: u64,
 }
 
 impl CPU {
-    // 標誌位操作函數
-    fn set_flag(&mut self, flag: u8, value: bool) {
-        if value {
-            self.registers.f |= flag;
+    // --- ALU 運算相關方法 ---
+    fn alu_add(&mut self, value: u8) {
+        let a = self.registers.a;
+        let result = a.wrapping_add(value);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(((a & 0xF) + (value & 0xF)) > 0xF);
+        self.registers.set_c_flag((a as u16 + value as u16) > 0xFF);
+        self.registers.a = result;
+    }
+    fn alu_adc(&mut self, value: u8) {
+        let a = self.registers.a;
+        let c = if (self.registers.f & 0x10) != 0 { 1 } else { 0 };
+        let result = a.wrapping_add(value).wrapping_add(c);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers
+            .set_h_flag(((a & 0xF) + (value & 0xF) + c) > 0xF);
+        self.registers
+            .set_c_flag((a as u16 + value as u16 + c as u16) > 0xFF);
+        self.registers.a = result;
+    }
+    fn alu_sub(&mut self, value: u8) {
+        let a = self.registers.a;
+        let result = a.wrapping_sub(value);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(true);
+        self.registers.set_h_flag((a & 0xF) < (value & 0xF));
+        self.registers.set_c_flag(a < value);
+        self.registers.a = result;
+    }
+    fn alu_sbc(&mut self, value: u8) {
+        let a = self.registers.a;
+        let c = if (self.registers.f & 0x10) != 0 { 1 } else { 0 };
+        let result = a.wrapping_sub(value).wrapping_sub(c);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(true);
+        self.registers.set_h_flag((a & 0xF) < ((value & 0xF) + c));
+        self.registers
+            .set_c_flag((a as u16) < (value as u16 + c as u16));
+        self.registers.a = result;
+    }
+    fn alu_and(&mut self, value: u8) {
+        let result = self.registers.a & value;
+        self.registers.a = result;
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(true);
+        self.registers.set_c_flag(false);
+    }
+    fn alu_or(&mut self, value: u8) {
+        let result = self.registers.a | value;
+        self.registers.a = result;
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag(false);
+    }
+    fn alu_xor(&mut self, value: u8) {
+        let result = self.registers.a ^ value;
+        self.registers.a = result;
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag(false);
+    }
+    fn alu_cp(&mut self, value: u8) {
+        let a = self.registers.a;
+        let result = a.wrapping_sub(value);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(true);
+        self.registers.set_h_flag((a & 0xF) < (value & 0xF));
+        self.registers.set_c_flag(a < value);
+    }
+
+    // --- 位元操作指令 ---
+    fn rlc(&mut self, value: u8) -> u8 {
+        let result = (value << 1) | (value >> 7);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag((value & 0x80) != 0);
+        result
+    }
+    fn rrc(&mut self, value: u8) -> u8 {
+        let result = (value >> 1) | ((value & 0x01) << 7);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag((value & 0x01) != 0);
+        result
+    }
+    fn rl(&mut self, value: u8) -> u8 {
+        let c = if (self.registers.f & 0x10) != 0 { 1 } else { 0 };
+        let result = (value << 1) | c;
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag((value & 0x80) != 0);
+        result
+    }
+    fn rr(&mut self, value: u8) -> u8 {
+        let c = if (self.registers.f & 0x10) != 0 {
+            0x80
         } else {
-            self.registers.f &= !flag;
+            0
+        };
+        let result = (value >> 1) | c;
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag((value & 0x01) != 0);
+        result
+    }
+    fn sla(&mut self, value: u8) -> u8 {
+        let result = value << 1;
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag((value & 0x80) != 0);
+        result
+    }
+    fn sra(&mut self, value: u8) -> u8 {
+        let result = (value >> 1) | (value & 0x80);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag((value & 0x01) != 0);
+        result
+    }
+    fn srl(&mut self, value: u8) -> u8 {
+        let result = value >> 1;
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag((value & 0x01) != 0);
+        result
+    }
+    fn swap(&mut self, value: u8) -> u8 {
+        let result = (value >> 4) | (value << 4);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag(false);
+        result
+    }
+
+    // --- 其他公共方法 ---
+    pub fn new(mmu: MMU) -> Self {
+        let mut registers = Registers::default();
+        registers.pc = 0x0100; // Game Boy CPU 應該從 0x0100 開始執行
+        registers.sp = 0xFFFE; // 初始化堆疊指標
+
+        CPU {
+            registers,
+            mmu,
+            instruction_count: 0,
         }
-    }
-
-    fn get_flag(&self, flag: u8) -> bool {
-        (self.registers.f & flag) != 0
-    }
-
-    fn set_zero_flag(&mut self, value: u8) {
-        self.set_flag(FLAG_Z, value == 0);
     }
 
     pub fn step(&mut self) {
         self.execute();
-        // 這裡未來會執行一條指令
-        // 目前先留空
-        let pos = (self.registers.pc as usize) % 160;
-        // 修復 VRAM 存取
-        let mut vram = self.mmu.vram.borrow_mut();
-        vram[pos] = self.registers.pc as u8;
-    }
-
-    pub fn new(mmu: MMU) -> Self {
-        CPU {
-            registers: Registers::default(),
-            mmu,
-            dec_b_count: 0,
-            loop_detection: true,
-        }
     }
 
     pub fn load_rom(&mut self, rom: &[u8]) {
@@ -88,6 +225,7 @@ impl CPU {
     pub fn execute(&mut self) {
         let opcode = self.fetch();
         self.decode_and_execute(opcode);
+        self.instruction_count += 1;
     }
 
     fn fetch(&mut self) -> u8 {
@@ -97,1114 +235,1681 @@ impl CPU {
     }
 
     fn decode_and_execute(&mut self, opcode: u8) {
+        // 添加調試輸出來追蹤指令執行
+        if self.instruction_count < 20 {
+            println!(
+                "執行指令: PC=0x{:04X}, opcode=0x{:02X}",
+                self.registers.pc.wrapping_sub(1),
+                opcode
+            );
+        }
+
         match opcode {
+            // 基本 CPU 控制指令
             0x00 => {} // NOP
-            0x3C => {
-                self.registers.a = self.registers.a.wrapping_add(1);
-            } // INC A
-            0x3D => {
-                self.registers.a = self.registers.a.wrapping_sub(1);
-            } // DEC A
-            0x04 => {
-                self.registers.b = self.registers.b.wrapping_add(1);
-            } // INC B
-            0x05 => {
-                // DEC B - 減少B寄存器並設置標誌位
-                // 檢測無限循環並智能處理
-                if self.loop_detection
-                    && self.registers.b == 0x00
-                    && self.registers.pc >= 0x0213
-                    && self.registers.pc <= 0x0217
-                {
-                    // 這是ROM初始化例程，B被設為0x00會造成255次循環
-                    // 為了加速初始化，我們設定一個合理的值
-                    println!("檢測到ROM初始化循環，自動優化B寄存器值 (0x00 -> 0x20)");
-                    self.registers.b = 0x20; // 設置為合理的記憶體清零大小
-                    self.dec_b_count = 0;
-                } else {
-                    // 正常執行DEC B
-                    self.registers.b = self.registers.b.wrapping_sub(1);
+            0x76 => {} // HALT
 
-                    // 追蹤循環防止無限執行
-                    self.dec_b_count += 1;
-                    if self.dec_b_count > 100 {
-                        println!("警告: DEC B循環次數過多 ({}次)，強制結束", self.dec_b_count);
-                        self.registers.b = 0x00;
-                        self.dec_b_count = 0;
-                    }
+            // 跳轉指令
+            0x18 => {
+                // JR n (相對跳轉)
+                let offset = self.fetch() as i8;
+                self.registers.pc = ((self.registers.pc as i32) + (offset as i32)) as u16;
+            }
+            0x20 => {
+                // JR NZ, n (如果 Z 標誌未設置則相對跳轉)
+                let offset = self.fetch() as i8;
+                let z_flag = (self.registers.f & 0x80) != 0;
+                if !z_flag {
+                    self.registers.pc = ((self.registers.pc as i32) + (offset as i32)) as u16;
                 }
-
-                // 設置標誌位
-                self.set_zero_flag(self.registers.b);
-                self.set_flag(FLAG_N, true);
-                self.set_flag(FLAG_H, (self.registers.b & 0x0F) == 0x0F);
-
-                // 如果B不是在循環中，重置計數器
-                if self.registers.b == 0 {
-                    self.dec_b_count = 0;
+            }
+            0x28 => {
+                // JR Z, n (如果 Z 標誌設置則相對跳轉)
+                let offset = self.fetch() as i8;
+                let z_flag = (self.registers.f & 0x80) != 0;
+                if z_flag {
+                    self.registers.pc = ((self.registers.pc as i32) + (offset as i32)) as u16;
                 }
-            } // DEC B
-            0x06 => {
-                let n = self.fetch();
-                self.registers.b = n;
-            } // LD B, n
-            0x0E => {
-                let n = self.fetch();
-                self.registers.c = n;
-            } // LD C, n
-            0x16 => {
-                let n = self.fetch();
-                self.registers.d = n;
-            } // LD D, n
-            0x1E => {
-                let n = self.fetch();
-                self.registers.e = n;
-            } // LD E, n
-            0x26 => {
-                let n = self.fetch();
-                self.registers.h = n;
-            } // LD H, n
-            0x2E => {
-                let n = self.fetch();
-                self.registers.l = n;
-            } // LD L, n
-            0x3E => {
-                let n = self.fetch();
-                self.registers.a = n;
-            } // LD A, n
-            0xAF => {
-                self.registers.a = 0;
-            } // XOR A
-            0x0F => {
-                // RRCA - 向右循環移位累加器
-                let carry = self.registers.a & 0x01;
-                self.registers.a = (self.registers.a >> 1) | (carry << 7);
-                self.set_flag(FLAG_Z, false);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, false);
-                self.set_flag(FLAG_C, carry != 0);
-            }
-            0xE0 => {
-                // LDH (n), A - 將A載入到高記憶體 (0xFF00 + n)
-                let n = self.fetch();
-                let addr = 0xFF00 + (n as u16);
-                self.mmu.write_byte(addr, self.registers.a);
-            }
-            0xF3 => {
-                // DI - Disable Interrupts
-                // 在Game Boy中，這會設置IME (Interrupt Master Enable) 標誌為false
-                // 目前我們簡化實現，不做實際操作
-            }
-            0xF0 => {
-                // LDH A, (n) - 從高記憶體載入到A (A = (0xFF00 + n))
-                let n = self.fetch();
-                let addr = 0xFF00 + (n as u16);
-                self.registers.a = self.mmu.read_byte(addr);
-            }
-            0x44 => {
-                self.registers.b = self.registers.h;
-            } // LD B, H
-            0xFE => {
-                // CP n - 比較A與立即數
-                let n = self.fetch();
-                let result = self.registers.a.wrapping_sub(n);
-                self.set_zero_flag(result);
-                self.set_flag(FLAG_N, true);
-                self.set_flag(FLAG_H, (self.registers.a & 0x0F) < (n & 0x0F));
-                self.set_flag(FLAG_C, self.registers.a < n);
-            }
-            0x94 => {
-                // SUB H - 從A減去H
-                let result = self.registers.a.wrapping_sub(self.registers.h);
-                self.set_zero_flag(result);
-                self.set_flag(FLAG_N, true);
-                self.set_flag(
-                    FLAG_H,
-                    (self.registers.a & 0x0F) < (self.registers.h & 0x0F),
-                );
-                self.set_flag(FLAG_C, self.registers.a < self.registers.h);
-                self.registers.a = result;
-            }
-            0x36 => {
-                // LD (HL), n - 將立即數載入到HL指向的記憶體
-                let n = self.fetch();
-                let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
-                self.mmu.write_byte(hl, n);
-            }
-            0x77 => {
-                // LD (HL), A - 將A載入到HL指向的記憶體
-                let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
-                self.mmu.write_byte(hl, self.registers.a);
-            }
-            0xEA => {
-                // LD (nn), A - 將A載入到絕對地址
-                let lo = self.fetch() as u16;
-                let hi = self.fetch() as u16;
-                let addr = (hi << 8) | lo;
-                self.mmu.write_byte(addr, self.registers.a);
             }
             0xC3 => {
-                // JP nn
+                // JP nn (絕對跳轉)
                 let lo = self.fetch() as u16;
                 let hi = self.fetch() as u16;
                 self.registers.pc = (hi << 8) | lo;
             }
-            0x18 => {
-                // JR n
-                let offset = self.fetch() as i8;
-                self.registers.pc = (self.registers.pc as i16 + offset as i16) as u16;
+            0xC9 => {
+                // RET (從棧中彈出地址並跳轉)
+                let sp = self.registers.sp;
+                let lo = self.mmu.read_byte(sp) as u16;
+                let hi = self.mmu.read_byte(sp + 1) as u16;
+                self.registers.sp = self.registers.sp.wrapping_add(2);
+                self.registers.pc = (hi << 8) | lo;
             }
-            0x20 => {
-                // JR NZ,n - 當Z標誌位為0時跳轉
-                let offset = self.fetch() as i8;
-                if !self.get_flag(FLAG_Z) {
-                    self.registers.pc = (self.registers.pc as i16 + offset as i16) as u16;
+            0xDA => {
+                // JP C, nn (如果 C 標誌設置則跳轉)
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                let addr = (hi << 8) | lo;
+                let c_flag = (self.registers.f & 0x10) != 0;
+                if c_flag {
+                    self.registers.pc = addr;
                 }
             }
-            0x28 => {
-                // JR Z,n
-                let offset = self.fetch() as i8;
-                if self.get_flag(FLAG_Z) {
-                    self.registers.pc = (self.registers.pc as i16 + offset as i16) as u16;
-                }
+
+            // 8-bit 加載指令
+            0x06 => {
+                // LD B, n
+                let n = self.fetch();
+                self.registers.b = n;
             }
-            0x32 => {
-                // LD (HL-), A
-                let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
-                self.mmu.write_byte(hl, self.registers.a);
-                let hl = hl.wrapping_sub(1);
-                self.registers.h = (hl >> 8) as u8;
-                self.registers.l = hl as u8;
+            0x0E => {
+                // LD C, n
+                let n = self.fetch();
+                self.registers.c = n;
             }
-            // 添加其他必要的指令
-            0x78 => {
-                self.registers.a = self.registers.b;
-            } // LD A, B
-            0x79 => {
-                self.registers.a = self.registers.c;
-            } // LD A, C
-            0x7A => {
-                self.registers.a = self.registers.d;
-            } // LD A, D
-            0x7B => {
-                self.registers.a = self.registers.e;
-            } // LD A, E
-            0x7C => {
-                self.registers.a = self.registers.h;
-            } // LD A, H
-            0x7D => {
-                self.registers.a = self.registers.l;
-            } // LD A, L
-            0x7F => { /* LD A, A (無動作) */ }
-            0x47 => {
-                self.registers.b = self.registers.a;
-            } // LD B, A
-            0x4F => {
-                self.registers.c = self.registers.a;
-            } // LD C, A
-            0x57 => {
-                self.registers.d = self.registers.a;
-            } // LD D, A
-            0x5F => {
-                self.registers.e = self.registers.a;
-            } // LD E, A
-            0x67 => {
-                self.registers.h = self.registers.a;
-            } // LD H, A
-            0x6F => {
-                self.registers.l = self.registers.a;
-            } // LD L, A
+            0x16 => {
+                // LD D, n
+                let n = self.fetch();
+                self.registers.d = n;
+            }
+            0x1E => {
+                // LD E, n
+                let n = self.fetch();
+                self.registers.e = n;
+            }
+            0x26 => {
+                // LD H, n
+                let n = self.fetch();
+                self.registers.h = n;
+            }
+            0x2E => {
+                // LD L, n
+                let n = self.fetch();
+                self.registers.l = n;
+            }
+            0x3E => {
+                // LD A, n
+                let n = self.fetch();
+                self.registers.a = n;
+            }
+            0xFA => {
+                // LD A, (nn) (從記憶體地址 nn 載入到 A)
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                let addr = (hi << 8) | lo;
+                self.registers.a = self.mmu.read_byte(addr);
+            }
+            0xE0 => {
+                // LDH (n), A (將 A 儲存到 0xFF00+n)
+                let n = self.fetch();
+                let addr = 0xFF00 + n as u16;
+                self.mmu.write_byte(addr, self.registers.a);
+            }
+            0xF0 => {
+                // LDH A, (n) (從 0xFF00+n 載入到 A)
+                let n = self.fetch();
+                let addr = 0xFF00 + n as u16;
+                self.registers.a = self.mmu.read_byte(addr);
+            }
+            0xE2 => {
+                // LD (0xFF00+C), A
+                let addr = 0xFF00 + self.registers.c as u16;
+                self.mmu.write_byte(addr, self.registers.a);
+            }
+
+            // 16-bit 加載指令
             0x01 => {
                 // LD BC, nn
                 let lo = self.fetch();
                 let hi = self.fetch();
-                self.registers.b = hi;
                 self.registers.c = lo;
+                self.registers.b = hi;
             }
-            0x0C => {
-                self.registers.c = self.registers.c.wrapping_add(1);
-            } // INC C
-            0x0D => {
-                self.registers.c = self.registers.c.wrapping_sub(1);
-            } // DEC C
             0x11 => {
                 // LD DE, nn
                 let lo = self.fetch();
                 let hi = self.fetch();
-                self.registers.d = hi;
                 self.registers.e = lo;
+                self.registers.d = hi;
             }
-            0x1C => {
-                self.registers.e = self.registers.e.wrapping_add(1);
-            } // INC E
-            0x1D => {
-                self.registers.e = self.registers.e.wrapping_sub(1);
-            } // DEC E
             0x21 => {
                 // LD HL, nn
                 let lo = self.fetch();
                 let hi = self.fetch();
-                self.registers.h = hi;
                 self.registers.l = lo;
+                self.registers.h = hi;
             }
             0x31 => {
                 // LD SP, nn
-                let lo = self.fetch() as u16;
-                let hi = self.fetch() as u16;
-                self.registers.sp = (hi << 8) | lo;
+                let lo = self.fetch();
+                let hi = self.fetch();
+                self.registers.sp = ((hi as u16) << 8) | (lo as u16);
             }
-            // 添加新發現的缺失指令
-            0x27 => {
-                // DAA
-                // 簡化的BCD調整實現
-                if self.get_flag(FLAG_N) {
-                    // 减法後的調整
-                    if self.get_flag(FLAG_C) {
-                        self.registers.a = self.registers.a.wrapping_sub(0x60);
-                    }
-                    if self.get_flag(FLAG_H) {
-                        self.registers.a = self.registers.a.wrapping_sub(0x06);
-                    }
-                } else {
-                    // 加法後的調整
-                    if self.get_flag(FLAG_C) || self.registers.a > 0x99 {
-                        self.registers.a = self.registers.a.wrapping_add(0x60);
-                        self.set_flag(FLAG_C, true);
-                    }
-                    if self.get_flag(FLAG_H) || (self.registers.a & 0x0F) > 0x09 {
-                        self.registers.a = self.registers.a.wrapping_add(0x06);
-                    }
-                }
-                self.set_zero_flag(self.registers.a);
-                self.set_flag(FLAG_H, false);
+
+            // 遞增/遞減指令
+            0x03 => {
+                // INC BC
+                let bc = ((self.registers.b as u16) << 8) | (self.registers.c as u16);
+                let result = bc.wrapping_add(1);
+                self.registers.b = (result >> 8) as u8;
+                self.registers.c = (result & 0xFF) as u8;
             }
-            0xCF => {
-                // RST 08H
-                self.registers.sp = self.registers.sp.wrapping_sub(2);
-                self.mmu
-                    .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
-                self.mmu
-                    .write_byte(self.registers.sp + 1, (self.registers.pc >> 8) as u8);
-                self.registers.pc = 0x08;
+            0x13 => {
+                // INC DE
+                let de = ((self.registers.d as u16) << 8) | (self.registers.e as u16);
+                let result = de.wrapping_add(1);
+                self.registers.d = (result >> 8) as u8;
+                self.registers.e = (result & 0xFF) as u8;
             }
-            0xE6 => {
-                // AND n
-                let n = self.fetch();
-                self.registers.a &= n;
-                self.set_zero_flag(self.registers.a);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, true);
-                self.set_flag(FLAG_C, false);
-            }
-            0xF8 => {
-                // LD HL, SP+n
-                let n = self.fetch() as i8;
-                let result = (self.registers.sp as i16).wrapping_add(n as i16) as u16;
+            0x23 => {
+                // INC HL
+                let hl = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                let result = hl.wrapping_add(1);
                 self.registers.h = (result >> 8) as u8;
-                self.registers.l = result as u8;
-                self.set_flag(FLAG_Z, false);
-                self.set_flag(FLAG_N, false);
-                // 簡化標誌位設置
-                self.set_flag(
-                    FLAG_H,
-                    ((self.registers.sp & 0x0F) + ((n as u16) & 0x0F)) > 0x0F,
-                );
-                self.set_flag(
-                    FLAG_C,
-                    ((self.registers.sp & 0xFF) + ((n as u16) & 0xFF)) > 0xFF,
-                );
+                self.registers.l = (result & 0xFF) as u8;
             }
-            0xFF => {
-                // RST 38H
-                self.registers.sp = self.registers.sp.wrapping_sub(2);
-                self.mmu
-                    .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
-                self.mmu
-                    .write_byte(self.registers.sp + 1, (self.registers.pc >> 8) as u8);
-                self.registers.pc = 0x38;
+            0x33 => {
+                // INC SP
+                self.registers.sp = self.registers.sp.wrapping_add(1);
             }
-            0xA7 => {
-                // AND A - 邏輯AND A與A (實際上是測試A是否為零)
-                self.registers.a &= self.registers.a;
-                self.set_zero_flag(self.registers.a);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, true); // AND指令總是設置H標誌位
-                self.set_flag(FLAG_C, false);
+            0x0B => {
+                // DEC BC
+                let bc = ((self.registers.b as u16) << 8) | (self.registers.c as u16);
+                let bc = bc.wrapping_sub(1);
+                self.registers.b = (bc >> 8) as u8;
+                self.registers.c = (bc & 0xFF) as u8;
+            }
+            0x1B => {
+                // DEC DE
+                let de = ((self.registers.d as u16) << 8) | (self.registers.e as u16);
+                let de = de.wrapping_sub(1);
+                self.registers.d = (de >> 8) as u8;
+                self.registers.e = (de & 0xFF) as u8;
+            }
+            0x2B => {
+                // DEC HL
+                let hl = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                let hl = hl.wrapping_sub(1);
+                self.registers.h = (hl >> 8) as u8;
+                self.registers.l = (hl & 0xFF) as u8;
+            }
+            0x3B => {
+                // DEC SP
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+            }
+
+            0x04 => {
+                // INC B
+                self.registers.b = self.registers.b.wrapping_add(1);
+                self.registers.set_z_flag(self.registers.b == 0);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag((self.registers.b & 0x0F) == 0);
+            }
+            0x0C => {
+                // INC C
+                self.registers.c = self.registers.c.wrapping_add(1);
+                self.registers.set_z_flag(self.registers.c == 0);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag((self.registers.c & 0x0F) == 0);
+            }
+            0x14 => {
+                // INC D
+                self.registers.d = self.registers.d.wrapping_add(1);
+                self.registers.set_z_flag(self.registers.d == 0);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag((self.registers.d & 0x0F) == 0);
+            }
+            0x1C => {
+                // INC E
+                self.registers.e = self.registers.e.wrapping_add(1);
+                self.registers.set_z_flag(self.registers.e == 0);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag((self.registers.e & 0x0F) == 0);
+            }
+            0x24 => {
+                // INC H
+                self.registers.h = self.registers.h.wrapping_add(1);
+                self.registers.set_z_flag(self.registers.h == 0);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag((self.registers.h & 0x0F) == 0);
+            }
+            0x2C => {
+                // INC L
+                self.registers.l = self.registers.l.wrapping_add(1);
+                self.registers.set_z_flag(self.registers.l == 0);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag((self.registers.l & 0x0F) == 0);
+            }
+            0x3C => {
+                // INC A
+                self.registers.a = self.registers.a.wrapping_add(1);
+                self.registers.set_z_flag(self.registers.a == 0);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag((self.registers.a & 0x0F) == 0);
+            }
+            0x05 => {
+                // DEC B
+                self.registers.b = self.registers.b.wrapping_sub(1);
+                self.registers.set_z_flag(self.registers.b == 0);
+                self.registers.set_n_flag(true);
+                self.registers.set_h_flag((self.registers.b & 0x0F) == 0x0F);
+            }
+            0x0D => {
+                // DEC C
+                self.registers.c = self.registers.c.wrapping_sub(1);
+                self.registers.set_z_flag(self.registers.c == 0);
+                self.registers.set_n_flag(true);
+                self.registers.set_h_flag((self.registers.c & 0x0F) == 0x0F);
+            }
+            0x15 => {
+                // DEC D
+                self.registers.d = self.registers.d.wrapping_sub(1);
+                self.registers.set_z_flag(self.registers.d == 0);
+                self.registers.set_n_flag(true);
+                self.registers.set_h_flag((self.registers.d & 0x0F) == 0x0F);
+            }
+            0x1D => {
+                // DEC E
+                self.registers.e = self.registers.e.wrapping_sub(1);
+                self.registers.set_z_flag(self.registers.e == 0);
+                self.registers.set_n_flag(true);
+                self.registers.set_h_flag((self.registers.e & 0x0F) == 0x0F);
+            }
+            0x25 => {
+                // DEC H
+                self.registers.h = self.registers.h.wrapping_sub(1);
+                self.registers.set_z_flag(self.registers.h == 0);
+                self.registers.set_n_flag(true);
+                self.registers.set_h_flag((self.registers.h & 0x0F) == 0x0F);
+            }
+            0x2D => {
+                // DEC L
+                self.registers.l = self.registers.l.wrapping_sub(1);
+                self.registers.set_z_flag(self.registers.l == 0);
+                self.registers.set_n_flag(true);
+                self.registers.set_h_flag((self.registers.l & 0x0F) == 0x0F);
+            }
+            0x3D => {
+                // DEC A
+                self.registers.a = self.registers.a.wrapping_sub(1);
+                self.registers.set_z_flag(self.registers.a == 0);
+                self.registers.set_n_flag(true);
+                self.registers.set_h_flag((self.registers.a & 0x0F) == 0x0F);
+            }
+
+            // HL 相關特殊操作
+            0x22 => {
+                // LD (HL+),A
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.mmu.write_byte(addr, self.registers.a);
+                let hl = addr.wrapping_add(1);
+                self.registers.h = (hl >> 8) as u8;
+                self.registers.l = (hl & 0xFF) as u8;
             }
             0x2A => {
-                // LD A, (HL+) - 從HL指向的記憶體載入到A，然後遞增HL
-                let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
-                self.registers.a = self.mmu.read_byte(hl);
-                let hl = hl.wrapping_add(1);
+                // LD A,(HL+)
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.registers.a = self.mmu.read_byte(addr);
+                let hl = addr.wrapping_add(1);
                 self.registers.h = (hl >> 8) as u8;
-                self.registers.l = hl as u8;
+                self.registers.l = (hl & 0xFF) as u8;
             }
-            0xE2 => {
-                // LD (C), A - 將A載入到高記憶體 (0xFF00 + C)
-                let addr = 0xFF00 + (self.registers.c as u16);
+            0x32 => {
+                // LD (HL-),A
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.mmu.write_byte(addr, self.registers.a);
+                let hl = addr.wrapping_sub(1);
+                self.registers.h = (hl >> 8) as u8;
+                self.registers.l = (hl & 0xFF) as u8;
+            }
+            0x3A => {
+                // LD A,(HL-)
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.registers.a = self.mmu.read_byte(addr);
+                let hl = addr.wrapping_sub(1);
+                self.registers.h = (hl >> 8) as u8;
+                self.registers.l = (hl & 0xFF) as u8;
+            }
+
+            // 記憶體載入/儲存指令
+            0x02 => {
+                // LD (BC),A
+                let addr = ((self.registers.b as u16) << 8) | (self.registers.c as u16);
                 self.mmu.write_byte(addr, self.registers.a);
             }
-            0xCD => {
-                // CALL nn - 呼叫子程序
+            0x12 => {
+                // LD (DE),A
+                let addr = ((self.registers.d as u16) << 8) | (self.registers.e as u16);
+                self.mmu.write_byte(addr, self.registers.a);
+            }
+
+            // 8-bit LD r, r' 指令 (0x40~0x7F)
+            0x40 => {
+                self.registers.b = self.registers.b;
+            } // LD B,B
+            0x41 => {
+                self.registers.b = self.registers.c;
+            } // LD B,C
+            0x42 => {
+                self.registers.b = self.registers.d;
+            } // LD B,D
+            0x43 => {
+                self.registers.b = self.registers.e;
+            } // LD B,E
+            0x44 => {
+                self.registers.b = self.registers.h;
+            } // LD B,H
+            0x45 => {
+                self.registers.b = self.registers.l;
+            } // LD B,L
+            0x46 => {
+                // LD B,(HL)
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.registers.b = self.mmu.read_byte(addr);
+            }
+            0x47 => {
+                self.registers.b = self.registers.a;
+            } // LD B,A
+            0x48 => {
+                self.registers.c = self.registers.b;
+            } // LD C,B
+            0x49 => {
+                self.registers.c = self.registers.c;
+            } // LD C,C
+            0x4A => {
+                self.registers.c = self.registers.d;
+            } // LD C,D
+            0x4B => {
+                self.registers.c = self.registers.e;
+            } // LD C,E
+            0x4C => {
+                self.registers.c = self.registers.h;
+            } // LD C,H
+            0x4D => {
+                self.registers.c = self.registers.l;
+            } // LD C,L
+            0x4E => {
+                // LD C,(HL)
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.registers.c = self.mmu.read_byte(addr);
+            }
+            0x4F => {
+                self.registers.c = self.registers.a;
+            } // LD C,A
+            0x50 => {
+                self.registers.d = self.registers.b;
+            } // LD D,B
+            0x51 => {
+                self.registers.d = self.registers.c;
+            } // LD D,C
+            0x52 => {
+                self.registers.d = self.registers.d;
+            } // LD D,D
+            0x53 => {
+                self.registers.d = self.registers.e;
+            } // LD D,E
+            0x54 => {
+                self.registers.d = self.registers.h;
+            } // LD D,H
+            0x55 => {
+                self.registers.d = self.registers.l;
+            } // LD D,L
+            0x56 => {
+                // LD D,(HL)
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.registers.d = self.mmu.read_byte(addr);
+            }
+            0x57 => {
+                self.registers.d = self.registers.a;
+            } // LD D,A
+            0x58 => {
+                self.registers.e = self.registers.b;
+            } // LD E,B
+            0x59 => {
+                self.registers.e = self.registers.c;
+            } // LD E,C
+            0x5A => {
+                self.registers.e = self.registers.d;
+            } // LD E,D
+            0x5B => {
+                self.registers.e = self.registers.e;
+            } // LD E,E
+            0x5C => {
+                self.registers.e = self.registers.h;
+            } // LD E,H
+            0x5D => {
+                self.registers.e = self.registers.l;
+            } // LD E,L
+            0x5E => {
+                // LD E,(HL)
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.registers.e = self.mmu.read_byte(addr);
+            }
+            0x5F => {
+                self.registers.e = self.registers.a;
+            } // LD E,A
+            0x60 => {
+                self.registers.h = self.registers.b;
+            } // LD H,B
+            0x61 => {
+                self.registers.h = self.registers.c;
+            } // LD H,C
+            0x62 => {
+                self.registers.h = self.registers.d;
+            } // LD H,D
+            0x63 => {
+                self.registers.h = self.registers.e;
+            } // LD H,E
+            0x64 => {
+                self.registers.h = self.registers.h;
+            } // LD H,H
+            0x65 => {
+                self.registers.h = self.registers.l;
+            } // LD H,L
+            0x66 => {
+                // LD H,(HL)
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.registers.h = self.mmu.read_byte(addr);
+            }
+            0x67 => {
+                self.registers.h = self.registers.a;
+            } // LD H,A
+            0x68 => {
+                self.registers.l = self.registers.b;
+            } // LD L,B
+            0x69 => {
+                self.registers.l = self.registers.c;
+            } // LD L,C
+            0x6A => {
+                self.registers.l = self.registers.d;
+            } // LD L,D
+            0x6B => {
+                self.registers.l = self.registers.e;
+            } // LD L,E
+            0x6C => {
+                self.registers.l = self.registers.h;
+            } // LD L,H
+            0x6D => {
+                self.registers.l = self.registers.l;
+            } // LD L,L
+            0x6E => {
+                // LD L,(HL)
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.registers.l = self.mmu.read_byte(addr);
+            }
+            0x6F => {
+                self.registers.l = self.registers.a;
+            } // LD L,A
+            0x70 => {
+                // LD (HL),B
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.mmu.write_byte(addr, self.registers.b);
+            }
+            0x71 => {
+                // LD (HL),C
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.mmu.write_byte(addr, self.registers.c);
+            }
+            0x72 => {
+                // LD (HL),D
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.mmu.write_byte(addr, self.registers.d);
+            }
+            0x73 => {
+                // LD (HL),E
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.mmu.write_byte(addr, self.registers.e);
+            }
+            0x74 => {
+                // LD (HL),H
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.mmu.write_byte(addr, self.registers.h);
+            }
+            0x75 => {
+                // LD (HL),L
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.mmu.write_byte(addr, self.registers.l);
+            }
+            0x77 => {
+                // LD (HL),A
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.mmu.write_byte(addr, self.registers.a);
+            }
+            0x78 => {
+                self.registers.a = self.registers.b;
+            } // LD A,B
+            0x79 => {
+                self.registers.a = self.registers.c;
+            } // LD A,C
+            0x7A => {
+                self.registers.a = self.registers.d;
+            } // LD A,D
+            0x7B => {
+                self.registers.a = self.registers.e;
+            } // LD A,E
+            0x7C => {
+                self.registers.a = self.registers.h;
+            } // LD A,H
+            0x7D => {
+                self.registers.a = self.registers.l;
+            } // LD A,L
+            0x7E => {
+                // LD A,(HL)
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.registers.a = self.mmu.read_byte(addr);
+            }
+            0x7F => {
+                self.registers.a = self.registers.a;
+            } // LD A,A
+
+            // 8-bit 算術與邏輯操作
+            0x80 => {
+                self.alu_add(self.registers.b);
+            } // ADD A,B
+            0x81 => {
+                self.alu_add(self.registers.c);
+            } // ADD A,C
+            0x82 => {
+                self.alu_add(self.registers.d);
+            } // ADD A,D
+            0x83 => {
+                self.alu_add(self.registers.e);
+            } // ADD A,E
+            0x84 => {
+                self.alu_add(self.registers.h);
+            } // ADD A,H
+            0x85 => {
+                self.alu_add(self.registers.l);
+            } // ADD A,L
+            0x86 => {
+                // ADD A,(HL)
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                let v = self.mmu.read_byte(addr);
+                self.alu_add(v);
+            }
+            0x87 => {
+                self.alu_add(self.registers.a);
+            } // ADD A,A
+            0x88 => {
+                self.alu_adc(self.registers.b);
+            } // ADC A,B
+            0x89 => {
+                self.alu_adc(self.registers.c);
+            } // ADC A,C
+            0x8A => {
+                self.alu_adc(self.registers.d);
+            } // ADC A,D
+            0x8B => {
+                self.alu_adc(self.registers.e);
+            } // ADC A,E
+            0x8C => {
+                self.alu_adc(self.registers.h);
+            } // ADC A,H
+            0x8D => {
+                self.alu_adc(self.registers.l);
+            } // ADC A,L
+            0x8E => {
+                // ADC A,(HL)
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                let v = self.mmu.read_byte(addr);
+                self.alu_adc(v);
+            }
+            0x8F => {
+                self.alu_adc(self.registers.a);
+            } // ADC A,A
+            0x90 => {
+                self.alu_sub(self.registers.b);
+            } // SUB B
+            0x91 => {
+                self.alu_sub(self.registers.c);
+            } // SUB C
+            0x92 => {
+                self.alu_sub(self.registers.d);
+            } // SUB D
+            0x93 => {
+                self.alu_sub(self.registers.e);
+            } // SUB E
+            0x94 => {
+                self.alu_sub(self.registers.h);
+            } // SUB H
+            0x95 => {
+                self.alu_sub(self.registers.l);
+            } // SUB L
+            0x96 => {
+                // SUB (HL)
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                let v = self.mmu.read_byte(addr);
+                self.alu_sub(v);
+            }
+            0x97 => {
+                self.alu_sub(self.registers.a);
+            } // SUB A
+            0x98 => {
+                self.alu_sbc(self.registers.b);
+            } // SBC A,B
+            0x99 => {
+                self.alu_sbc(self.registers.c);
+            } // SBC A,C
+            0x9A => {
+                self.alu_sbc(self.registers.d);
+            } // SBC A,D
+            0x9B => {
+                self.alu_sbc(self.registers.e);
+            } // SBC A,E
+            0x9C => {
+                self.alu_sbc(self.registers.h);
+            } // SBC A,H
+            0x9D => {
+                self.alu_sbc(self.registers.l);
+            } // SBC A,L
+            0x9E => {
+                // SBC A,(HL)
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                let v = self.mmu.read_byte(addr);
+                self.alu_sbc(v);
+            }
+            0x9F => {
+                self.alu_sbc(self.registers.a);
+            } // SBC A,A
+            0xA0 => {
+                self.alu_and(self.registers.b);
+            } // AND B
+            0xA1 => {
+                self.alu_and(self.registers.c);
+            } // AND C
+            0xA2 => {
+                self.alu_and(self.registers.d);
+            } // AND D
+            0xA3 => {
+                self.alu_and(self.registers.e);
+            } // AND E
+            0xA4 => {
+                self.alu_and(self.registers.h);
+            } // AND H
+            0xA5 => {
+                self.alu_and(self.registers.l);
+            } // AND L
+            0xA6 => {
+                // AND (HL)
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                let v = self.mmu.read_byte(addr);
+                self.alu_and(v);
+            }
+            0xA7 => {
+                self.alu_and(self.registers.a);
+            } // AND A
+            0xA8 => {
+                self.alu_xor(self.registers.b);
+            } // XOR B
+            0xA9 => {
+                self.alu_xor(self.registers.c);
+            } // XOR C
+            0xAA => {
+                self.alu_xor(self.registers.d);
+            } // XOR D
+            0xAB => {
+                self.alu_xor(self.registers.e);
+            } // XOR E
+            0xAC => {
+                self.alu_xor(self.registers.h);
+            } // XOR H
+            0xAD => {
+                self.alu_xor(self.registers.l);
+            } // XOR L
+            0xAE => {
+                // XOR (HL)
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                let v = self.mmu.read_byte(addr);
+                self.alu_xor(v);
+            }
+            0xAF => {
+                self.alu_xor(self.registers.a);
+            } // XOR A
+            0xB0 => {
+                self.alu_or(self.registers.b);
+            } // OR B
+            0xB1 => {
+                self.alu_or(self.registers.c);
+            } // OR C
+            0xB2 => {
+                self.alu_or(self.registers.d);
+            } // OR D
+            0xB3 => {
+                self.alu_or(self.registers.e);
+            } // OR E
+            0xB4 => {
+                self.alu_or(self.registers.h);
+            } // OR H
+            0xB5 => {
+                self.alu_or(self.registers.l);
+            } // OR L
+            0xB6 => {
+                // OR (HL)
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                let v = self.mmu.read_byte(addr);
+                self.alu_or(v);
+            }
+            0xB7 => {
+                self.alu_or(self.registers.a);
+            } // OR A
+            0xB8 => {
+                self.alu_cp(self.registers.b);
+            } // CP B
+            0xB9 => {
+                self.alu_cp(self.registers.c);
+            } // CP C
+            0xBA => {
+                self.alu_cp(self.registers.d);
+            } // CP D
+            0xBB => {
+                self.alu_cp(self.registers.e);
+            } // CP E
+            0xBC => {
+                self.alu_cp(self.registers.h);
+            } // CP H
+            0xBD => {
+                self.alu_cp(self.registers.l);
+            } // CP L
+            0xBE => {
+                // CP (HL)
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                let v = self.mmu.read_byte(addr);
+                self.alu_cp(v);
+            }
+            0xBF => {
+                self.alu_cp(self.registers.a);
+            } // CP A
+            // 立即數算術指令
+            0xFE => {
+                // CP n (Compare A with immediate value n)
+                let n = self.fetch();
+                self.alu_cp(n);
+            }
+            // 中斷控制指令
+            0xF3 => {
+                // DI (Disable Interrupts)
+                // 在真實的Game Boy中，這會禁用中斷
+                // 目前簡化實現，不做任何操作
+            }
+            0xFB => {
+                // EI (Enable Interrupts)
+                // 在真實的Game Boy中，這會啟用中斷
+                // 目前簡化實現，不做任何操作
+            }
+
+            // 記憶體操作指令
+            0x36 => {
+                // LD (HL), n (載入立即數到HL指向的記憶體)
+                let n = self.fetch();
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.mmu.write_byte(addr, n);
+            }
+            0xEA => {
+                // LD (nn), A (載入A到絕對地址nn)
                 let lo = self.fetch() as u16;
                 let hi = self.fetch() as u16;
                 let addr = (hi << 8) | lo;
+                self.mmu.write_byte(addr, self.registers.a);
+            }
 
-                // 將返回地址推入堆疊
-                self.registers.sp = self.registers.sp.wrapping_sub(2);
-                self.mmu
-                    .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
-                self.mmu
-                    .write_byte(self.registers.sp + 1, (self.registers.pc >> 8) as u8);
-
+            // 子程序調用指令
+            0xCD => {
+                // CALL nn (調用子程序)
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                let addr = (hi << 8) | lo;
+                
+                // 將當前PC推入堆疊
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                
                 // 跳轉到目標地址
                 self.registers.pc = addr;
             }
-            0x95 => {
-                // SUB L - 從A減去L
-                let result = self.registers.a.wrapping_sub(self.registers.l);
-                self.set_zero_flag(result);
-                self.set_flag(FLAG_N, true);
-                self.set_flag(
-                    FLAG_H,
-                    (self.registers.a & 0x0F) < (self.registers.l & 0x0F),
-                );
-                self.set_flag(FLAG_C, self.registers.a < self.registers.l);
-                self.registers.a = result;
-            }
-            0xFB => {
-                // EI - Enable Interrupts
-                // 在Game Boy中，這會設置IME (Interrupt Master Enable) 標誌為true
-                // 目前我們簡化實現，不做實際操作
-            }
-            0xA6 => {
-                // AND (HL) - 邏輯AND A與HL指向的記憶體
-                let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
-                let value = self.mmu.read_byte(hl);
-                self.registers.a &= value;
-                self.set_zero_flag(self.registers.a);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, true);
-                self.set_flag(FLAG_C, false);
-            }
-            0x29 => {
-                // ADD HL, HL - HL加上自身 (相當於HL * 2)
-                let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
-                let result = hl.wrapping_add(hl);
-                self.registers.h = (result >> 8) as u8;
-                self.registers.l = result as u8;
 
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, (hl & 0x0FFF) + (hl & 0x0FFF) > 0x0FFF);
-                self.set_flag(FLAG_C, result < hl);
-            }
+            // 條件跳轉指令
             0xCA => {
-                // JP Z, nn - 當Z標誌位為1時跳轉
+                // JP Z, nn (如果Z標誌設置則跳轉)
                 let lo = self.fetch() as u16;
                 let hi = self.fetch() as u16;
                 let addr = (hi << 8) | lo;
-                if self.get_flag(FLAG_Z) {
+                let z_flag = (self.registers.f & 0x80) != 0;
+                if z_flag {
                     self.registers.pc = addr;
                 }
             }
-            0x1B => {
-                // DEC DE - 遞減DE暫存器對
-                let de = ((self.registers.d as u16) << 8) | self.registers.e as u16;
-                let result = de.wrapping_sub(1);
-                self.registers.d = (result >> 8) as u8;
-                self.registers.e = result as u8;
+
+            // RST指令（重啟到固定地址）
+            0xCF => {
+                // RST 08H (重啟到地址0x08)
+                // 將當前PC推入堆疊
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                
+                // 跳轉到0x08
+                self.registers.pc = 0x08;
             }
-            0x02 => {
-                // LD (BC), A - 將A載入到BC指向的記憶體
-                let bc = ((self.registers.b as u16) << 8) | self.registers.c as u16;
-                self.mmu.write_byte(bc, self.registers.a);
+            0xFF => {
+                // RST 38H (重啟到地址0x38)
+                // 將當前PC推入堆疊
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                
+                // 跳轉到0x38
+                self.registers.pc = 0x38;
             }
-            0x7E => {
-                // LD A, (HL) - 從HL指向的記憶體載入到A
-                let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
-                self.registers.a = self.mmu.read_byte(hl);
-            }
-            0x2C => {
-                // INC L - 遞增L暫存器
-                self.registers.l = self.registers.l.wrapping_add(1);
-                self.set_zero_flag(self.registers.l);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, (self.registers.l & 0x0F) == 0x00);
-            }
-            0x13 => {
-                // INC DE - 遞增DE暫存器對
-                let de = ((self.registers.d as u16) << 8) | self.registers.e as u16;
-                let result = de.wrapping_add(1);
-                self.registers.d = (result >> 8) as u8;
-                self.registers.e = result as u8;
-            }
-            0x0B => {
-                // DEC BC - 遞減BC暫存器對
-                let bc = ((self.registers.b as u16) << 8) | self.registers.c as u16;
-                let result = bc.wrapping_sub(1);
-                self.registers.b = (result >> 8) as u8;
-                self.registers.c = result as u8;
-            }
-            0xB1 => {
-                // OR C - 邏輯OR A與C
-                self.registers.a |= self.registers.c;
-                self.set_zero_flag(self.registers.a);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, false);
-                self.set_flag(FLAG_C, false);
-            }
-            0xC9 => {
-                // RET - 從子程序返回
-                let lo = self.mmu.read_byte(self.registers.sp) as u16;
-                let hi = self.mmu.read_byte(self.registers.sp + 1) as u16;
-                self.registers.sp = self.registers.sp.wrapping_add(2);
-                self.registers.pc = (hi << 8) | lo;
-            }
-            0x12 => {
-                // LD (DE), A - 將A載入到DE指向的記憶體
-                let de = ((self.registers.d as u16) << 8) | self.registers.e as u16;
-                self.mmu.write_byte(de, self.registers.a);
-            }
-            // 新增的缺失指令
-            0x03 => {
-                // INC BC - 遞增BC暫存器對
-                let bc = ((self.registers.b as u16) << 8) | self.registers.c as u16;
-                let result = bc.wrapping_add(1);
-                self.registers.b = (result >> 8) as u8;
-                self.registers.c = result as u8;
-            }
-            0x14 => {
-                // INC D - 遞增D暫存器
-                self.registers.d = self.registers.d.wrapping_add(1);
-                self.set_zero_flag(self.registers.d);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, (self.registers.d & 0x0F) == 0x00);
-            }
-            0x8C => {
-                // ADC A, H - 加法與進位A = A + H + Carry
-                let carry = if self.get_flag(FLAG_C) { 1 } else { 0 };
-                let result = (self.registers.a as u16) + (self.registers.h as u16) + carry;
-                self.set_zero_flag(result as u8);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(
-                    FLAG_H,
-                    ((self.registers.a & 0x0F) as u16) + ((self.registers.h & 0x0F) as u16) + carry
-                        > 0x0F,
-                );
-                self.set_flag(FLAG_C, result > 0xFF);
-                self.registers.a = result as u8;
-            }
-            0x07 => {
-                // RLCA - 向左循環移位累加器
-                let carry = (self.registers.a & 0x80) >> 7;
-                self.registers.a = (self.registers.a << 1) | carry;
-                self.set_flag(FLAG_Z, false);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, false);
-                self.set_flag(FLAG_C, carry != 0);
-            }
-            0x1A => {
-                // LD A, (DE) - 從DE指向的記憶體載入到A
-                let de = ((self.registers.d as u16) << 8) | self.registers.e as u16;
-                self.registers.a = self.mmu.read_byte(de);
-            }
-            0xC0 => {
-                // RET NZ - 當Z標誌位為0時返回
-                if !self.get_flag(FLAG_Z) {
-                    let lo = self.mmu.read_byte(self.registers.sp) as u16;
-                    let hi = self.mmu.read_byte(self.registers.sp + 1) as u16;
-                    self.registers.sp = self.registers.sp.wrapping_add(2);
-                    self.registers.pc = (hi << 8) | lo;
+
+            // 算術指令
+            0x27 => {
+                // DAA (十進制調整累加器)
+                let mut a = self.registers.a;
+                let mut adjust = 0;
+                
+                if (self.registers.f & 0x20) != 0 || (!((self.registers.f & 0x40) != 0) && (a & 0x0F) > 9) {
+                    adjust |= 0x06;
                 }
+                
+                if (self.registers.f & 0x10) != 0 || (!((self.registers.f & 0x40) != 0) && a > 0x99) {
+                    adjust |= 0x60;
+                    self.registers.set_c_flag(true);
+                }
+                
+                if (self.registers.f & 0x40) != 0 {
+                    a = a.wrapping_sub(adjust);
+                } else {
+                    a = a.wrapping_add(adjust);
+                }
+                
+                self.registers.set_z_flag(a == 0);
+                self.registers.set_h_flag(false);
+                self.registers.a = a;
             }
-            0x1F => {
-                // RRA - 向右移位累加器通過進位
-                let carry = if self.get_flag(FLAG_C) { 0x80 } else { 0 };
-                let new_carry = self.registers.a & 0x01;
-                self.registers.a = (self.registers.a >> 1) | carry;
-                self.set_flag(FLAG_Z, false);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, false);
-                self.set_flag(FLAG_C, new_carry != 0);
-            }
-            0x25 => {
-                // DEC H - 遞減H暫存器
-                self.registers.h = self.registers.h.wrapping_sub(1);
-                self.set_zero_flag(self.registers.h);
-                self.set_flag(FLAG_N, true);
-                self.set_flag(FLAG_H, (self.registers.h & 0x0F) == 0x0F);
-            }
-            0x15 => {
-                // DEC D - 遞減D暫存器
-                self.registers.d = self.registers.d.wrapping_sub(1);
-                self.set_zero_flag(self.registers.d);
-                self.set_flag(FLAG_N, true);
-                self.set_flag(FLAG_H, (self.registers.d & 0x0F) == 0x0F);
-            }
-            0xB0 => {
-                // OR B - 邏輯OR A與B
-                self.registers.a |= self.registers.b;
-                self.set_zero_flag(self.registers.a);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, false);
-                self.set_flag(FLAG_C, false);
-            }
-            0xBF => {
-                // CP A - 比較A與A (總是設置Z標誌位)
-                self.set_flag(FLAG_Z, true);
-                self.set_flag(FLAG_N, true);
-                self.set_flag(FLAG_H, false);
-                self.set_flag(FLAG_C, false);
-            }
-            0x19 => {
-                // ADD HL, DE - HL加上DE
-                let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
-                let de = ((self.registers.d as u16) << 8) | self.registers.e as u16;
-                let result = hl.wrapping_add(de);
+            0x29 => {
+                // ADD HL, HL (HL加上自身)
+                let hl = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                let result = hl.wrapping_add(hl);
+                
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag((hl & 0x0FFF) + (hl & 0x0FFF) > 0x0FFF);
+                self.registers.set_c_flag(result < hl);
+                
                 self.registers.h = (result >> 8) as u8;
-                self.registers.l = result as u8;
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, (hl & 0x0FFF) + (de & 0x0FFF) > 0x0FFF);
-                self.set_flag(FLAG_C, result < hl);
+                self.registers.l = (result & 0xFF) as u8;
+            }
+
+            // 特殊載入指令
+            0xF8 => {
+                // LD HL, SP+n (載入SP+偏移到HL)
+                let offset = self.fetch() as i8;
+                let sp = self.registers.sp;
+                let result = (sp as i32 + offset as i32) as u16;
+                
+                self.registers.set_z_flag(false);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag((sp & 0x0F) + ((offset as u16) & 0x0F) > 0x0F);
+                self.registers.set_c_flag((sp & 0xFF) + ((offset as u16) & 0xFF) > 0xFF);
+                
+                self.registers.h = (result >> 8) as u8;
+                self.registers.l = (result & 0xFF) as u8;
+            }
+
+            // 邏輯指令
+            0xE6 => {
+                // AND n (邏輯AND立即數)
+                let n = self.fetch();
+                self.alu_and(n);
+            }
+            0x0F => {
+                // RRCA (右旋轉累加器)
+                let a = self.registers.a;
+                let result = (a >> 1) | ((a & 0x01) << 7);
+                
+                self.registers.set_z_flag(false);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag(false);
+                self.registers.set_c_flag((a & 0x01) != 0);
+                
+                self.registers.a = result;
+            }
+            0x0F => {
+                // RRCA (右旋轉累加器)
+                let a = self.registers.a;
+                let result = (a >> 1) | ((a & 0x01) << 7);
+                
+                self.registers.set_z_flag(false);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag(false);
+                self.registers.set_c_flag((a & 0x01) != 0);
+                
+                self.registers.a = result;
+            }
+
+            // 添加缺失的指令
+            0x07 => {
+                // RLCA (左旋轉累加器)
+                let a = self.registers.a;
+                let result = (a << 1) | (a >> 7);
+                
+                self.registers.set_z_flag(false);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag(false);
+                self.registers.set_c_flag((a & 0x80) != 0);
+                
+                self.registers.a = result;
             }
             0x08 => {
-                // LD (nn), SP - 將SP載入到絕對地址
+                // LD (nn), SP (載入SP到絕對地址)
                 let lo = self.fetch() as u16;
                 let hi = self.fetch() as u16;
                 let addr = (hi << 8) | lo;
                 self.mmu.write_byte(addr, (self.registers.sp & 0xFF) as u8);
-                self.mmu
-                    .write_byte(addr + 1, (self.registers.sp >> 8) as u8);
-            }
-            0xE4 => {
-                // LDH (n), A (另一種編碼) - 將A載入到高記憶體
-                let n = self.fetch();
-                let addr = 0xFF00 + (n as u16);
-                self.mmu.write_byte(addr, self.registers.a);
-            }
-            0xD2 => {
-                // JP NC, nn - 當C標誌位為0時跳轉
-                let lo = self.fetch() as u16;
-                let hi = self.fetch() as u16;
-                let addr = (hi << 8) | lo;
-                if !self.get_flag(FLAG_C) {
-                    self.registers.pc = addr;
-                }
+                self.mmu.write_byte(addr + 1, (self.registers.sp >> 8) as u8);
             }
             0x0A => {
-                // LD A, (BC) - 從BC指向的記憶體載入到A
-                let bc = ((self.registers.b as u16) << 8) | self.registers.c as u16;
-                self.registers.a = self.mmu.read_byte(bc);
+                // LD A, (BC)
+                let addr = ((self.registers.b as u16) << 8) | (self.registers.c as u16);
+                self.registers.a = self.mmu.read_byte(addr);
             }
-            0x23 => {
-                // INC HL - 遞增HL暫存器對
-                let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
-                let result = hl.wrapping_add(1);
-                self.registers.h = (result >> 8) as u8;
-                self.registers.l = result as u8;
-            }
-            0x8A => {
-                // ADC A, D - 加法與進位A = A + D + Carry
-                let carry = if self.get_flag(FLAG_C) { 1 } else { 0 };
-                let result = (self.registers.a as u16) + (self.registers.d as u16) + carry;
-                self.set_zero_flag(result as u8);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(
-                    FLAG_H,
-                    ((self.registers.a & 0x0F) as u16) + ((self.registers.d & 0x0F) as u16) + carry
-                        > 0x0F,
-                );
-                self.set_flag(FLAG_C, result > 0xFF);
-                self.registers.a = result as u8;
-            }
-            0x41 => {
-                // LD B, C - 將C載入到B
-                self.registers.b = self.registers.c;
-            }
-            0x93 => {
-                // SUB E - 從A減去E
-                let result = self.registers.a.wrapping_sub(self.registers.e);
-                self.set_zero_flag(result);
-                self.set_flag(FLAG_N, true);
-                self.set_flag(
-                    FLAG_H,
-                    (self.registers.a & 0x0F) < (self.registers.e & 0x0F),
-                );
-                self.set_flag(FLAG_C, self.registers.a < self.registers.e);
+            0x17 => {
+                // RLA (左旋轉累加器通過進位)
+                let a = self.registers.a;
+                let c = if (self.registers.f & 0x10) != 0 { 1 } else { 0 };
+                let result = (a << 1) | c;
+                
+                self.registers.set_z_flag(false);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag(false);
+                self.registers.set_c_flag((a & 0x80) != 0);
+                
                 self.registers.a = result;
             }
-            0xFC => {
-                // CALL C, nn - 當C標誌位為1時呼叫
+            0x19 => {
+                // ADD HL, DE
+                let hl = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                let de = ((self.registers.d as u16) << 8) | (self.registers.e as u16);
+                let result = hl.wrapping_add(de);
+                
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag((hl & 0x0FFF) + (de & 0x0FFF) > 0x0FFF);
+                self.registers.set_c_flag(result < hl);
+                
+                self.registers.h = (result >> 8) as u8;
+                self.registers.l = (result & 0xFF) as u8;
+            }
+            0x1A => {
+                // LD A, (DE)
+                let addr = ((self.registers.d as u16) << 8) | (self.registers.e as u16);
+                self.registers.a = self.mmu.read_byte(addr);
+            }
+            0x1F => {
+                // RRA (右旋轉累加器通過進位)
+                let a = self.registers.a;
+                let c = if (self.registers.f & 0x10) != 0 { 0x80 } else { 0 };
+                let result = (a >> 1) | c;
+                
+                self.registers.set_z_flag(false);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag(false);
+                self.registers.set_c_flag((a & 0x01) != 0);
+                
+                self.registers.a = result;
+            }
+            0x2F => {
+                // CPL (補數累加器)
+                self.registers.a = !self.registers.a;
+                self.registers.set_n_flag(true);
+                self.registers.set_h_flag(true);
+            }
+            0x37 => {
+                // SCF (設置進位標誌)
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag(false);
+                self.registers.set_c_flag(true);
+            }
+            0x3F => {
+                // CCF (補數進位標誌)
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag(false);
+                let c = (self.registers.f & 0x10) != 0;
+                self.registers.set_c_flag(!c);
+            }
+
+            // 條件返回指令
+            0xC0 => {
+                // RET NZ (如果Z標誌未設置則返回)
+                let z_flag = (self.registers.f & 0x80) != 0;
+                if !z_flag {
+                    let sp = self.registers.sp;
+                    let lo = self.mmu.read_byte(sp) as u16;
+                    let hi = self.mmu.read_byte(sp + 1) as u16;
+                    self.registers.sp = self.registers.sp.wrapping_add(2);
+                    self.registers.pc = (hi << 8) | lo;
+                }
+            }
+            0xC8 => {
+                // RET Z (如果Z標誌設置則返回)
+                let z_flag = (self.registers.f & 0x80) != 0;
+                if z_flag {
+                    let sp = self.registers.sp;
+                    let lo = self.mmu.read_byte(sp) as u16;
+                    let hi = self.mmu.read_byte(sp + 1) as u16;
+                    self.registers.sp = self.registers.sp.wrapping_add(2);
+                    self.registers.pc = (hi << 8) | lo;
+                }
+            }
+            0xD0 => {
+                // RET NC (如果C標誌未設置則返回)
+                let c_flag = (self.registers.f & 0x10) != 0;
+                if !c_flag {
+                    let sp = self.registers.sp;
+                    let lo = self.mmu.read_byte(sp) as u16;
+                    let hi = self.mmu.read_byte(sp + 1) as u16;
+                    self.registers.sp = self.registers.sp.wrapping_add(2);
+                    self.registers.pc = (hi << 8) | lo;
+                }
+            }
+            0xD8 => {
+                // RET C (如果C標誌設置則返回)
+                let c_flag = (self.registers.f & 0x10) != 0;
+                if c_flag {
+                    let sp = self.registers.sp;
+                    let lo = self.mmu.read_byte(sp) as u16;
+                    let hi = self.mmu.read_byte(sp + 1) as u16;
+                    self.registers.sp = self.registers.sp.wrapping_add(2);
+                    self.registers.pc = (hi << 8) | lo;
+                }
+            }
+
+            // 條件跳轉指令
+            0xC2 => {
+                // JP NZ, nn (如果Z標誌未設置則跳轉)
                 let lo = self.fetch() as u16;
                 let hi = self.fetch() as u16;
                 let addr = (hi << 8) | lo;
-                if self.get_flag(FLAG_C) {
-                    self.registers.sp = self.registers.sp.wrapping_sub(2);
-                    self.mmu
-                        .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
-                    self.mmu
-                        .write_byte(self.registers.sp + 1, (self.registers.pc >> 8) as u8);
+                let z_flag = (self.registers.f & 0x80) != 0;
+                if !z_flag {
                     self.registers.pc = addr;
                 }
             }
-            0xC7 => {
-                // RST 00H
-                self.registers.sp = self.registers.sp.wrapping_sub(2);
-                self.mmu
-                    .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
-                self.mmu
-                    .write_byte(self.registers.sp + 1, (self.registers.pc >> 8) as u8);
-                self.registers.pc = 0x00;
+            0xD2 => {
+                // JP NC, nn (如果C標誌未設置則跳轉)
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                let addr = (hi << 8) | lo;
+                let c_flag = (self.registers.f & 0x10) != 0;
+                if !c_flag {
+                    self.registers.pc = addr;
+                }
             }
-            0xF7 => {
-                // RST 30H
-                self.registers.sp = self.registers.sp.wrapping_sub(2);
-                self.mmu
-                    .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
-                self.mmu
-                    .write_byte(self.registers.sp + 1, (self.registers.pc >> 8) as u8);
-                self.registers.pc = 0x30;
+
+            // 條件調用指令
+            0xC4 => {
+                // CALL NZ, nn (如果Z標誌未設置則調用)
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                let addr = (hi << 8) | lo;
+                let z_flag = (self.registers.f & 0x80) != 0;
+                if !z_flag {
+                    // 將當前PC推入堆疊
+                    self.registers.sp = self.registers.sp.wrapping_sub(1);
+                    self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                    self.registers.sp = self.registers.sp.wrapping_sub(1);
+                    self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                    
+                    // 跳轉到目標地址
+                    self.registers.pc = addr;
+                }
             }
-            0xB3 => {
-                // OR E - 邏輯OR A與E
-                self.registers.a |= self.registers.e;
-                self.set_zero_flag(self.registers.a);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, false);
-                self.set_flag(FLAG_C, false);
+            0xCC => {
+                // CALL Z, nn (如果Z標誌設置則調用)
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                let addr = (hi << 8) | lo;
+                let z_flag = (self.registers.f & 0x80) != 0;
+                if z_flag {
+                    // 將當前PC推入堆疊
+                    self.registers.sp = self.registers.sp.wrapping_sub(1);
+                    self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                    self.registers.sp = self.registers.sp.wrapping_sub(1);
+                    self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                    
+                    // 跳轉到目標地址
+                    self.registers.pc = addr;
+                }
             }
-            0x24 => {
-                // INC H - 遞增H暫存器
-                self.registers.h = self.registers.h.wrapping_add(1);
-                self.set_zero_flag(self.registers.h);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, (self.registers.h & 0x0F) == 0x00);
+            0xD4 => {
+                // CALL NC, nn (如果C標誌未設置則調用)
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                let addr = (hi << 8) | lo;
+                let c_flag = (self.registers.f & 0x10) != 0;
+                if !c_flag {
+                    // 將當前PC推入堆疊
+                    self.registers.sp = self.registers.sp.wrapping_sub(1);
+                    self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                    self.registers.sp = self.registers.sp.wrapping_sub(1);
+                    self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                    
+                    // 跳轉到目標地址
+                    self.registers.pc = addr;
+                }
             }
-            0x51 => {
-                // LD D, C - 將C載入到D
-                self.registers.d = self.registers.c;
+            0xDC => {
+                // CALL C, nn (如果C標誌設置則調用)
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                let addr = (hi << 8) | lo;
+                let c_flag = (self.registers.f & 0x10) != 0;
+                if c_flag {
+                    // 將當前PC推入堆疊
+                    self.registers.sp = self.registers.sp.wrapping_sub(1);
+                    self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                    self.registers.sp = self.registers.sp.wrapping_sub(1);
+                    self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                    
+                    // 跳轉到目標地址
+                    self.registers.pc = addr;
+                }
             }
-            0xB5 => {
-                // OR L - 邏輯OR A與L
-                self.registers.a |= self.registers.l;
-                self.set_zero_flag(self.registers.a);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, false);
-                self.set_flag(FLAG_C, false);
-            }
-            0xE5 => {
-                // PUSH HL - 將HL推入堆疊
-                self.registers.sp = self.registers.sp.wrapping_sub(2);
-                self.mmu.write_byte(self.registers.sp, self.registers.l);
-                self.mmu.write_byte(self.registers.sp + 1, self.registers.h);
-            }
-            0xA0 => {
-                // AND B - 邏輯AND A與B
-                self.registers.a &= self.registers.b;
-                self.set_zero_flag(self.registers.a);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, true);
-                self.set_flag(FLAG_C, false);
-            }
-            0x2F => {
-                // CPL - 補碼A (按位取反)
-                self.registers.a = !self.registers.a;
-                self.set_flag(FLAG_N, true);
-                self.set_flag(FLAG_H, true);
-            }
-            0xCB => {
-                // CB prefix - 延伸指令集
-                let cb_opcode = self.fetch();
-                self.execute_cb_instruction(cb_opcode);
-            }
-            0x37 => {
-                // SCF - 設置進位標誌位
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, false);
-                self.set_flag(FLAG_C, true);
-            }
-            0xA9 => {
-                // XOR C - 邏輯XOR A與C
-                self.registers.a ^= self.registers.c;
-                self.set_zero_flag(self.registers.a);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, false);
-                self.set_flag(FLAG_C, false);
-            }
-            0xA1 => {
-                // AND C - 邏輯AND A與C
-                self.registers.a &= self.registers.c;
-                self.set_zero_flag(self.registers.a);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, true);
-                self.set_flag(FLAG_C, false);
-            }
-            0xEF => {
-                // RST 28H
-                self.registers.sp = self.registers.sp.wrapping_sub(2);
-                self.mmu
-                    .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
-                self.mmu
-                    .write_byte(self.registers.sp + 1, (self.registers.pc >> 8) as u8);
-                self.registers.pc = 0x28;
+
+            // 立即數運算指令
+            0xC6 => {
+                // ADD A, n
+                let n = self.fetch();
+                self.alu_add(n);
             }
             0xCE => {
-                // ADC A, n - 加法與進位A = A + n + Carry
+                // ADC A, n
                 let n = self.fetch();
-                let carry = if self.get_flag(FLAG_C) { 1 } else { 0 };
-                let result = (self.registers.a as u16) + (n as u16) + carry;
-                self.set_zero_flag(result as u8);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(
-                    FLAG_H,
-                    ((self.registers.a & 0x0F) as u16) + ((n & 0x0F) as u16) + carry > 0x0F,
-                );
-                self.set_flag(FLAG_C, result > 0xFF);
-                self.registers.a = result as u8;
+                self.alu_adc(n);
             }
-            0xAE => {
-                // XOR (HL) - 邏輯XOR A與HL指向的記憶體
-                let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
-                let value = self.mmu.read_byte(hl);
-                self.registers.a ^= value;
-                self.set_zero_flag(self.registers.a);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, false);
-                self.set_flag(FLAG_C, false);
+            0xD6 => {
+                // SUB n
+                let n = self.fetch();
+                self.alu_sub(n);
             }
-            0x87 => {
-                // ADD A, A - A加上自身
-                let result = (self.registers.a as u16) + (self.registers.a as u16);
-                self.set_zero_flag(result as u8);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(
-                    FLAG_H,
-                    (self.registers.a & 0x0F) + (self.registers.a & 0x0F) > 0x0F,
-                );
-                self.set_flag(FLAG_C, result > 0xFF);
-                self.registers.a = result as u8;
+            0xDE => {
+                // SBC A, n
+                let n = self.fetch();
+                self.alu_sbc(n);
             }
-            0xE1 => {
-                // POP HL - 從堆疊彈出到HL
-                self.registers.l = self.mmu.read_byte(self.registers.sp);
-                self.registers.h = self.mmu.read_byte(self.registers.sp + 1);
+            0xEE => {
+                // XOR n
+                let n = self.fetch();
+                self.alu_xor(n);
+            }
+            0xF6 => {
+                // OR n
+                let n = self.fetch();
+                self.alu_or(n);
+            }
+
+            // 堆疊操作指令
+            0xC1 => {
+                // POP BC
+                let lo = self.mmu.read_byte(self.registers.sp);
+                let hi = self.mmu.read_byte(self.registers.sp + 1);
                 self.registers.sp = self.registers.sp.wrapping_add(2);
+                self.registers.c = lo;
+                self.registers.b = hi;
             }
-            0x5E => {
-                // LD E, (HL) - 從HL指向的記憶體載入到E
-                let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
-                self.registers.e = self.mmu.read_byte(hl);
+            0xC5 => {
+                // PUSH BC
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, self.registers.b);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, self.registers.c);
             }
-            0x56 => {
-                // LD D, (HL) - 從HL指向的記憶體載入到D
-                let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
-                self.registers.d = self.mmu.read_byte(hl);
+            0xD1 => {
+                // POP DE
+                let lo = self.mmu.read_byte(self.registers.sp);
+                let hi = self.mmu.read_byte(self.registers.sp + 1);
+                self.registers.sp = self.registers.sp.wrapping_add(2);
+                self.registers.e = lo;
+                self.registers.d = hi;
             }
             0xD5 => {
-                // PUSH DE - 將DE推入堆疊
-                self.registers.sp = self.registers.sp.wrapping_sub(2);
+                // PUSH DE
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, self.registers.d);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
                 self.mmu.write_byte(self.registers.sp, self.registers.e);
-                self.mmu.write_byte(self.registers.sp + 1, self.registers.d);
+            }
+            0xE1 => {
+                // POP HL
+                let lo = self.mmu.read_byte(self.registers.sp);
+                let hi = self.mmu.read_byte(self.registers.sp + 1);
+                self.registers.sp = self.registers.sp.wrapping_add(2);
+                self.registers.l = lo;
+                self.registers.h = hi;
+            }
+            0xE5 => {
+                // PUSH HL
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, self.registers.h);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, self.registers.l);
+            }
+            0xF1 => {
+                // POP AF
+                let lo = self.mmu.read_byte(self.registers.sp);
+                let hi = self.mmu.read_byte(self.registers.sp + 1);
+                self.registers.sp = self.registers.sp.wrapping_add(2);
+                self.registers.f = lo & 0xF0; // 下4位總是0
+                self.registers.a = hi;
+            }
+            0xF5 => {
+                // PUSH AF
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, self.registers.a);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, self.registers.f);
+            }
+
+            // RST指令（重啟到固定地址）
+            0xC7 => {
+                // RST 00H (重啟到地址0x00)
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                self.registers.pc = 0x00;
+            }
+            0xD7 => {
+                // RST 10H (重啟到地址0x10)
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                self.registers.pc = 0x10;
+            }
+            0xDF => {
+                // RST 18H (重啟到地址0x18)
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                self.registers.pc = 0x18;
+            }
+            0xE7 => {
+                // RST 20H (重啟到地址0x20)
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                self.registers.pc = 0x20;
+            }
+            0xEF => {
+                // RST 28H (重啟到地址0x28)
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                self.registers.pc = 0x28;
+            }
+            0xF7 => {
+                // RST 30H (重啟到地址0x30)
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                self.registers.pc = 0x30;
+            }
+
+            // 其他指令
+            0xE4 => {
+                // LD (n), A (載入A到高記憶體, 等同於LDH)
+                let n = self.fetch();
+                let addr = 0xFF00 + n as u16;
+                self.mmu.write_byte(addr, self.registers.a);
             }
             0xE9 => {
-                // JP (HL) - 跳轉到HL指向的地址
-                self.registers.pc = ((self.registers.h as u16) << 8) | self.registers.l as u16;
+                // JP (HL) (跳轉到HL指向的地址)
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.registers.pc = addr;
             }
+            0xF9 => {
+                // LD SP, HL (載入HL到SP)
+                self.registers.sp = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+            }
+            0xFC => {
+                // CALL C, nn (如果C標誌設置則調用 - 應該已有實現，重複指令)
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                let addr = (hi << 8) | lo;
+                let c_flag = (self.registers.f & 0x10) != 0;
+                if c_flag {
+                    self.registers.sp = self.registers.sp.wrapping_sub(1);
+                    self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                    self.registers.sp = self.registers.sp.wrapping_sub(1);
+                    self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                    self.registers.pc = addr;
+                }
+            }
+            // 0xCB 前綴指令 - 執行位元操作指令
+            0xCB => {
+                let cb_opcode = self.fetch();
+                match cb_opcode {
+                    // RLC r (Rotate Left Circular)
+                    0x00 => {
+                        self.registers.b = self.rlc(self.registers.b);
+                    }
+                    0x01 => {
+                        self.registers.c = self.rlc(self.registers.c);
+                    }
+                    0x02 => {
+                        self.registers.d = self.rlc(self.registers.d);
+                    }
+                    0x03 => {
+                        self.registers.e = self.rlc(self.registers.e);
+                    }
+                    0x04 => {
+                        self.registers.h = self.rlc(self.registers.h);
+                    }
+                    0x05 => {
+                        self.registers.l = self.rlc(self.registers.l);
+                    }
+                    0x06 => {
+                        // RLC (HL)
+                        let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                        let v = self.mmu.read_byte(addr);
+                        let r = self.rlc(v);
+                        self.mmu.write_byte(addr, r);
+                    }
+                    0x07 => {
+                        self.registers.a = self.rlc(self.registers.a);
+                    }
+
+                    // RRC r (Rotate Right Circular)
+                    0x08 => {
+                        self.registers.b = self.rrc(self.registers.b);
+                    }
+                    0x09 => {
+                        self.registers.c = self.rrc(self.registers.c);
+                    }
+                    0x0A => {
+                        self.registers.d = self.rrc(self.registers.d);
+                    }
+                    0x0B => {
+                        self.registers.e = self.rrc(self.registers.e);
+                    }
+                    0x0C => {
+                        self.registers.h = self.rrc(self.registers.h);
+                    }
+                    0x0D => {
+                        self.registers.l = self.rrc(self.registers.l);
+                    }
+                    0x0E => {
+                        // RRC (HL)
+                        let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                        let v = self.mmu.read_byte(addr);
+                        let r = self.rrc(v);
+                        self.mmu.write_byte(addr, r);
+                    }
+                    0x0F => {
+                        self.registers.a = self.rrc(self.registers.a);
+                    }
+
+                    // RL r (Rotate Left through Carry)
+                    0x10 => {
+                        self.registers.b = self.rl(self.registers.b);
+                    }
+                    0x11 => {
+                        self.registers.c = self.rl(self.registers.c);
+                    }
+                    0x12 => {
+                        self.registers.d = self.rl(self.registers.d);
+                    }
+                    0x13 => {
+                        self.registers.e = self.rl(self.registers.e);
+                    }
+                    0x14 => {
+                        self.registers.h = self.rl(self.registers.h);
+                    }
+                    0x15 => {
+                        self.registers.l = self.rl(self.registers.l);
+                    }
+                    0x16 => {
+                        // RL (HL)
+                        let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                        let v = self.mmu.read_byte(addr);
+                        let r = self.rl(v);
+                        self.mmu.write_byte(addr, r);
+                    }
+                    0x17 => {
+                        self.registers.a = self.rl(self.registers.a);
+                    }
+
+                    // RR r (Rotate Right through Carry)
+                    0x18 => {
+                        self.registers.b = self.rr(self.registers.b);
+                    }
+                    0x19 => {
+                        self.registers.c = self.rr(self.registers.c);
+                    }
+                    0x1A => {
+                        self.registers.d = self.rr(self.registers.d);
+                    }
+                    0x1B => {
+                        self.registers.e = self.rr(self.registers.e);
+                    }
+                    0x1C => {
+                        self.registers.h = self.rr(self.registers.h);
+                    }
+                    0x1D => {
+                        self.registers.l = self.rr(self.registers.l);
+                    }
+                    0x1E => {
+                        // RR (HL)
+                        let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                        let v = self.mmu.read_byte(addr);
+                        let r = self.rr(v);
+                        self.mmu.write_byte(addr, r);
+                    }
+                    0x1F => {
+                        self.registers.a = self.rr(self.registers.a);
+                    }
+
+                    // SLA r (Shift Left Arithmetic)
+                    0x20 => {
+                        self.registers.b = self.sla(self.registers.b);
+                    }
+                    0x21 => {
+                        self.registers.c = self.sla(self.registers.c);
+                    }
+                    0x22 => {
+                        self.registers.d = self.sla(self.registers.d);
+                    }
+                    0x23 => {
+                        self.registers.e = self.sla(self.registers.e);
+                    }
+                    0x24 => {
+                        self.registers.h = self.sla(self.registers.h);
+                    }
+                    0x25 => {
+                        self.registers.l = self.sla(self.registers.l);
+                    }
+                    0x26 => {
+                        // SLA (HL)
+                        let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                        let v = self.mmu.read_byte(addr);
+                        let r = self.sla(v);
+                        self.mmu.write_byte(addr, r);
+                    }
+                    0x27 => {
+                        self.registers.a = self.sla(self.registers.a);
+                    }
+
+                    // SRA r (Shift Right Arithmetic)
+                    0x28 => {
+                        self.registers.b = self.sra(self.registers.b);
+                    }
+                    0x29 => {
+                        self.registers.c = self.sra(self.registers.c);
+                    }
+                    0x2A => {
+                        self.registers.d = self.sra(self.registers.d);
+                    }
+                    0x2B => {
+                        self.registers.e = self.sra(self.registers.e);
+                    }
+                    0x2C => {
+                        self.registers.h = self.sra(self.registers.h);
+                    }
+                    0x2D => {
+                        self.registers.l = self.sra(self.registers.l);
+                    }
+                    0x2E => {
+                        // SRA (HL)
+                        let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                        let v = self.mmu.read_byte(addr);
+                        let r = self.sra(v);
+                        self.mmu.write_byte(addr, r);
+                    }
+                    0x2F => {
+                        self.registers.a = self.sra(self.registers.a);
+                    }
+
+                    // SWAP r (Swap nibbles)
+                    0x30 => {
+                        self.registers.b = self.swap(self.registers.b);
+                    }
+                    0x31 => {
+                        self.registers.c = self.swap(self.registers.c);
+                    }
+                    0x32 => {
+                        self.registers.d = self.swap(self.registers.d);
+                    }
+                    0x33 => {
+                        self.registers.e = self.swap(self.registers.e);
+                    }
+                    0x34 => {
+                        self.registers.h = self.swap(self.registers.h);
+                    }
+                    0x35 => {
+                        self.registers.l = self.swap(self.registers.l);
+                    }
+                    0x36 => {
+                        // SWAP (HL)
+                        let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                        let v = self.mmu.read_byte(addr);
+                        let r = self.swap(v);
+                        self.mmu.write_byte(addr, r);
+                    }
+                    0x37 => {
+                        self.registers.a = self.swap(self.registers.a);
+                    }
+
+                    // SRL r (Shift Right Logical)
+                    0x38 => {
+                        self.registers.b = self.srl(self.registers.b);
+                    }
+                    0x39 => {
+                        self.registers.c = self.srl(self.registers.c);
+                    }
+                    0x3A => {
+                        self.registers.d = self.srl(self.registers.d);
+                    }
+                    0x3B => {
+                        self.registers.e = self.srl(self.registers.e);
+                    }
+                    0x3C => {
+                        self.registers.h = self.srl(self.registers.h);
+                    }
+                    0x3D => {
+                        self.registers.l = self.srl(self.registers.l);
+                    }
+                    0x3E => {
+                        // SRL (HL)
+                        let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                        let v = self.mmu.read_byte(addr);
+                        let r = self.srl(v);
+                        self.mmu.write_byte(addr, r);
+                    }
+                    0x3F => {
+                        self.registers.a = self.srl(self.registers.a);
+                    }
+
+                    // BIT b, r (Test bit b in register r)
+                    0x40..=0x7F => {
+                        let bit = (cb_opcode - 0x40) / 8;
+                        let reg = (cb_opcode - 0x40) % 8;
+                        let value = match reg {
+                            0 => self.registers.b,
+                            1 => self.registers.c,
+                            2 => self.registers.d,
+                            3 => self.registers.e,
+                            4 => self.registers.h,
+                            5 => self.registers.l,
+                            6 => {
+                                let addr =
+                                    ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                                self.mmu.read_byte(addr)
+                            }
+                            7 => self.registers.a,
+                            _ => 0, // 不應該出現的情況
+                        };
+                        let z = (value & (1 << bit)) == 0;
+                        self.registers.set_z_flag(z);
+                        self.registers.set_n_flag(false);
+                        self.registers.set_h_flag(true);
+                    }
+
+                    // RES b, r (Reset bit b in register r)
+                    0x80..=0xBF => {
+                        let bit = (cb_opcode - 0x80) / 8;
+                        let reg = (cb_opcode - 0x80) % 8;
+                        match reg {
+                            0 => self.registers.b &= !(1 << bit),
+                            1 => self.registers.c &= !(1 << bit),
+                            2 => self.registers.d &= !(1 << bit),
+                            3 => self.registers.e &= !(1 << bit),
+                            4 => self.registers.h &= !(1 << bit),
+                            5 => self.registers.l &= !(1 << bit),
+                            6 => {
+                                let addr =
+                                    ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                                let v = self.mmu.read_byte(addr) & !(1 << bit);
+                                self.mmu.write_byte(addr, v);
+                            }
+                            7 => self.registers.a &= !(1 << bit),
+                            _ => {} // 不應該出現的情況
+                        }
+                    }
+
+                    // SET b, r (Set bit b in register r)
+                    0xC0..=0xFF => {
+                        let bit = (cb_opcode - 0xC0) / 8;
+                        let reg = (cb_opcode - 0xC0) % 8;
+                        match reg {
+                            0 => self.registers.b |= 1 << bit,
+                            1 => self.registers.c |= 1 << bit,
+                            2 => self.registers.d |= 1 << bit,
+                            3 => self.registers.e |= 1 << bit,
+                            4 => self.registers.h |= 1 << bit,
+                            5 => self.registers.l |= 1 << bit,
+                            6 => {
+                                let addr =
+                                    ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                                let v = self.mmu.read_byte(addr) | (1 << bit);
+                                self.mmu.write_byte(addr, v);
+                            }
+                            7 => self.registers.a |= 1 << bit,
+                            _ => {} // 不應該出現的情況
+                        }
+                    }
+                }
+            }
+
+            // 未實現的指令會輸出提示
             _ => {
-                println!(
-                    "未實現的指令: 0x{:02X} at PC: 0x{:04X}",
-                    opcode,
-                    self.registers.pc - 1
-                );
-            }
-        }
-    }
-
-    fn execute_cb_instruction(&mut self, opcode: u8) {
-        match opcode {
-            // BIT 指令 - 測試位
-            0x40..=0x47 => {
-                // BIT 0, r
-                let bit = 0;
-                let value = match opcode & 0x07 {
-                    0 => self.registers.b,
-                    1 => self.registers.c,
-                    2 => self.registers.d,
-                    3 => self.registers.e,
-                    4 => self.registers.h,
-                    5 => self.registers.l,
-                    6 => {
-                        let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
-                        self.mmu.read_byte(hl)
-                    }
-                    7 => self.registers.a,
-                    _ => unreachable!(),
-                };
-                self.set_flag(FLAG_Z, (value & (1 << bit)) == 0);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, true);
-            }
-            0x48..=0x4F => {
-                // BIT 1, r
-                let bit = 1;
-                let value = match opcode & 0x07 {
-                    0 => self.registers.b,
-                    1 => self.registers.c,
-                    2 => self.registers.d,
-                    3 => self.registers.e,
-                    4 => self.registers.h,
-                    5 => self.registers.l,
-                    6 => {
-                        let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
-                        self.mmu.read_byte(hl)
-                    }
-                    7 => self.registers.a,
-                    _ => unreachable!(),
-                };
-                self.set_flag(FLAG_Z, (value & (1 << bit)) == 0);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, true);
-            }
-            0x50..=0x57 => {
-                // BIT 2, r
-                let bit = 2;
-                let value = match opcode & 0x07 {
-                    0 => self.registers.b,
-                    1 => self.registers.c,
-                    2 => self.registers.d,
-                    3 => self.registers.e,
-                    4 => self.registers.h,
-                    5 => self.registers.l,
-                    6 => {
-                        let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
-                        self.mmu.read_byte(hl)
-                    }
-                    7 => self.registers.a,
-                    _ => unreachable!(),
-                };
-                self.set_flag(FLAG_Z, (value & (1 << bit)) == 0);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, true);
-            }
-            0x58..=0x5F => {
-                // BIT 3, r
-                let bit = 3;
-                let value = match opcode & 0x07 {
-                    0 => self.registers.b,
-                    1 => self.registers.c,
-                    2 => self.registers.d,
-                    3 => self.registers.e,
-                    4 => self.registers.h,
-                    5 => self.registers.l,
-                    6 => {
-                        let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
-                        self.mmu.read_byte(hl)
-                    }
-                    7 => self.registers.a,
-                    _ => unreachable!(),
-                };
-                self.set_flag(FLAG_Z, (value & (1 << bit)) == 0);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, true);
-            }
-            0x60..=0x67 => {
-                // BIT 4, r
-                let bit = 4;
-                let value = match opcode & 0x07 {
-                    0 => self.registers.b,
-                    1 => self.registers.c,
-                    2 => self.registers.d,
-                    3 => self.registers.e,
-                    4 => self.registers.h,
-                    5 => self.registers.l,
-                    6 => {
-                        let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
-                        self.mmu.read_byte(hl)
-                    }
-                    7 => self.registers.a,
-                    _ => unreachable!(),
-                };
-                self.set_flag(FLAG_Z, (value & (1 << bit)) == 0);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, true);
-            }
-            0x68..=0x6F => {
-                // BIT 5, r
-                let bit = 5;
-                let value = match opcode & 0x07 {
-                    0 => self.registers.b,
-                    1 => self.registers.c,
-                    2 => self.registers.d,
-                    3 => self.registers.e,
-                    4 => self.registers.h,
-                    5 => self.registers.l,
-                    6 => {
-                        let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
-                        self.mmu.read_byte(hl)
-                    }
-                    7 => self.registers.a,
-                    _ => unreachable!(),
-                };
-                self.set_flag(FLAG_Z, (value & (1 << bit)) == 0);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, true);
-            }
-            0x70..=0x77 => {
-                // BIT 6, r
-                let bit = 6;
-                let value = match opcode & 0x07 {
-                    0 => self.registers.b,
-                    1 => self.registers.c,
-                    2 => self.registers.d,
-                    3 => self.registers.e,
-                    4 => self.registers.h,
-                    5 => self.registers.l,
-                    6 => {
-                        let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
-                        self.mmu.read_byte(hl)
-                    }
-                    7 => self.registers.a,
-                    _ => unreachable!(),
-                };
-                self.set_flag(FLAG_Z, (value & (1 << bit)) == 0);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, true);
-            }
-            0x78..=0x7F => {
-                // BIT 7, r
-                let bit = 7;
-                let value = match opcode & 0x07 {
-                    0 => self.registers.b,
-                    1 => self.registers.c,
-                    2 => self.registers.d,
-                    3 => self.registers.e,
-                    4 => self.registers.h,
-                    5 => self.registers.l,
-                    6 => {
-                        let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
-                        self.mmu.read_byte(hl)
-                    }
-                    7 => self.registers.a,
-                    _ => unreachable!(),
-                };
-                self.set_flag(FLAG_Z, (value & (1 << bit)) == 0);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, true);
-            }
-            // RLC 指令 - 向左循環移位
-            0x00..=0x07 => {
-                let reg_index = opcode & 0x07;
-                let (value, addr) = match reg_index {
-                    0 => (self.registers.b, None),
-                    1 => (self.registers.c, None),
-                    2 => (self.registers.d, None),
-                    3 => (self.registers.e, None),
-                    4 => (self.registers.h, None),
-                    5 => (self.registers.l, None),
-                    6 => {
-                        let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
-                        (self.mmu.read_byte(hl), Some(hl))
-                    }
-                    7 => (self.registers.a, None),
-                    _ => unreachable!(),
-                };
-
-                let carry = (value & 0x80) >> 7;
-                let result = (value << 1) | carry;
-
-                self.set_zero_flag(result);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, false);
-                self.set_flag(FLAG_C, carry != 0);
-
-                match reg_index {
-                    0 => self.registers.b = result,
-                    1 => self.registers.c = result,
-                    2 => self.registers.d = result,
-                    3 => self.registers.e = result,
-                    4 => self.registers.h = result,
-                    5 => self.registers.l = result,
-                    6 => self.mmu.write_byte(addr.unwrap(), result),
-                    7 => self.registers.a = result,
-                    _ => unreachable!(),
-                }
-            } // SRL 指令 - 邏輯右移
-            0x38..=0x3F => {
-                let reg_index = opcode & 0x07;
-                let (value, addr) = match reg_index {
-                    0 => (self.registers.b, None),
-                    1 => (self.registers.c, None),
-                    2 => (self.registers.d, None),
-                    3 => (self.registers.e, None),
-                    4 => (self.registers.h, None),
-                    5 => (self.registers.l, None),
-                    6 => {
-                        let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
-                        (self.mmu.read_byte(hl), Some(hl))
-                    }
-                    7 => (self.registers.a, None),
-                    _ => unreachable!(),
-                };
-
-                let carry = value & 0x01;
-                let result = value >> 1;
-
-                self.set_zero_flag(result);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, false);
-                self.set_flag(FLAG_C, carry != 0);
-
-                match reg_index {
-                    0 => self.registers.b = result,
-                    1 => self.registers.c = result,
-                    2 => self.registers.d = result,
-                    3 => self.registers.e = result,
-                    4 => self.registers.h = result,
-                    5 => self.registers.l = result,
-                    6 => self.mmu.write_byte(addr.unwrap(), result),
-                    7 => self.registers.a = result,
-                    _ => unreachable!(),
-                }
-            }
-            // SWAP 指令 - 交換高低4位
-            0x30..=0x37 => {
-                let reg_index = opcode & 0x07;
-                let (value, addr) = match reg_index {
-                    0 => (self.registers.b, None),
-                    1 => (self.registers.c, None),
-                    2 => (self.registers.d, None),
-                    3 => (self.registers.e, None),
-                    4 => (self.registers.h, None),
-                    5 => (self.registers.l, None),
-                    6 => {
-                        let hl = ((self.registers.h as u16) << 8) | self.registers.l as u16;
-                        (self.mmu.read_byte(hl), Some(hl))
-                    }
-                    7 => (self.registers.a, None),
-                    _ => unreachable!(),
-                };
-
-                let result = ((value & 0x0F) << 4) | ((value & 0xF0) >> 4);
-
-                self.set_zero_flag(result);
-                self.set_flag(FLAG_N, false);
-                self.set_flag(FLAG_H, false);
-                self.set_flag(FLAG_C, false);
-
-                match reg_index {
-                    0 => self.registers.b = result,
-                    1 => self.registers.c = result,
-                    2 => self.registers.d = result,
-                    3 => self.registers.e = result,
-                    4 => self.registers.h = result,
-                    5 => self.registers.l = result,
-                    6 => self.mmu.write_byte(addr.unwrap(), result),
-                    7 => self.registers.a = result,
-                    _ => unreachable!(),
-                }
-            }
-            _ => {
-                println!("未實現的CB指令: 0x{:02X}", opcode);
+                println!("未處理的指令: 0x{:02X}", opcode);
             }
         }
     }
