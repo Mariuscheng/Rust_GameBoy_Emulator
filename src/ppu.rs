@@ -53,27 +53,25 @@ impl PPU {
         self.oam = data;
     }
     pub fn step(&mut self) {
+        // 改進的LCDC處理邏輯
         // 檢查 LCD 是否啟用 (LCDC 第 7 位)
-        // [修正] 不再因 LCDC 關閉就 return，讓 main.rs 強制修正能生效
-        // if (self.lcdc & 0x80) == 0 {
-        //     println!("⚠️ LCD 已關閉 (LCDC: 0x{:02X})", self.lcdc);
-        //     for pixel in &mut self.framebuffer {
-        //         *pixel = 0xFF0000FFu32; // 藍色，明顯指示 LCD 關閉
-        //     }
-        //     return;
-        // }
+        if (self.lcdc & 0x80) == 0 {
+            // LCD 關閉，顯示更明顯的灰色背景，讓使用者知道LCD已關閉
+            for pixel in &mut self.framebuffer {
+                *pixel = 0xFF666666u32; // 稍深的灰色，表示 LCD 關閉
+            }
+            return;
+        }
 
         // 檢查背景是否啟用 (LCDC 第 0 位)
         let bg_enable = (self.lcdc & 0x01) != 0;
 
-        // 如果背景關閉，顯示一個明顯的顏色以便調試
-        if !bg_enable {
-            println!("⚠️ 背景已關閉 (LCDC: 0x{:02X})", self.lcdc);
-            for pixel in &mut self.framebuffer {
-                *pixel = 0xFFFF0000u32; // 紅色，明顯指示背景關閉
-            }
-            return;
-        } // 背景和 Window 渲染
+        // 初始化畫面
+        for pixel in &mut self.framebuffer {
+            *pixel = 0xFFFFFFFFu32; // 白色背景
+        }
+
+        // 背景和 Window 渲染
         for y in 0..144 {
             for x in 0..160 {
                 let mut color = 0xFFFFFFFFu32; // 默認白色
@@ -166,7 +164,9 @@ impl PPU {
     }
     pub fn get_framebuffer(&self) -> &[u32] {
         &self.framebuffer
-    } // 獲取瓦片像素顏色的輔助方法
+    }
+
+    // 獲取瓦片像素顏色的輔助方法
     fn get_tile_pixel_color(
         &self,
         tile_id: u8,
@@ -174,8 +174,22 @@ impl PPU {
         pixel_y: usize,
         palette: u8,
     ) -> u32 {
-        // 瓦片數據開始於 VRAM 的 $8000 (0x0000 in vram array)
-        let tile_data_addr = (tile_id as usize) * 16 + pixel_y * 2;
+        // 檢查基於 LCDC 第 4 位的瓦片數據地址
+        // 根據 LCDC 第 4 位選擇不同的瓦片數據區域
+        // 0 = 0x8800-0x97FF，使用有符號編號（-128到127）
+        // 1 = 0x8000-0x8FFF，使用無符號編號（0到255）
+        let tile_data_addr;
+        if (self.lcdc & 0x10) != 0 {
+            // 使用 0x8000-0x8FFF (VRAM 0x0000-0x0FFF)
+            tile_data_addr = (tile_id as usize) * 16 + pixel_y * 2;
+        } else {
+            // 使用 0x8800-0x97FF，將 tile_id 視為有符號整數
+            let signed_id = tile_id as i8;
+            // 0x9000 實際上是 0x1000 在 VRAM 陣列中
+            tile_data_addr = 0x1000 + ((signed_id as i16) + 128) as usize * 16 + pixel_y * 2;
+        }
+
+        // 檢查範圍
         if tile_data_addr + 1 >= self.vram.len() {
             return 0xFFFFFFFFu32; // 如果超出範圍，返回白色
         }

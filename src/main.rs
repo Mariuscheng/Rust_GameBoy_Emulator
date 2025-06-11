@@ -84,21 +84,22 @@ fn main() {
     let mut frame_count = 0;
     let mut cycle_count = 0;
 
-    println!("🚀 開始模擬循環...");
-
-    // 主模擬循環
+    println!("🚀 開始模擬循環..."); // 主模擬循環
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        // 1. 讓 ROM 自己控制 LCDC，不再每幀強制修正
-        // let lcdc_value = cpu.mmu.read_byte(0xFF40);
-        // let fixed_lcdc = lcdc_value | 0x91;
-        // if fixed_lcdc != lcdc_value {
-        //     cpu.mmu.write_byte(0xFF40, fixed_lcdc);
-        //     println!(
-        //         "⚡ LCDC 強制修正! 原值: 0x{:02X} -> 0x{:02X}",
-        //         lcdc_value, fixed_lcdc
-        //     );
-        // }
-        // ppu.set_lcdc(fixed_lcdc);
+        // 確保 LCDC 始終啟用 LCD 顯示和背景，但降低日誌頻率
+        let lcdc_value = cpu.mmu.read_byte(0xFF40);
+        let fixed_lcdc = lcdc_value | 0x91; // 設置第 7 位 (LCD 開啟) 和第 0 位 (背景開啟)
+        if fixed_lcdc != lcdc_value {
+            cpu.mmu.write_byte(0xFF40, fixed_lcdc);
+            // 只在重要變更時或每100幀顯示一次日誌，降低噪音
+            if (lcdc_value & 0x80) == 0 || (lcdc_value & 0x01) == 0 || frame_count % 100 == 0 {
+                println!(
+                    "⚡ LCDC 修正 (幀 {}): 0x{:02X} -> 0x{:02X}",
+                    frame_count, lcdc_value, fixed_lcdc
+                );
+            }
+        }
+        ppu.set_lcdc(fixed_lcdc);
 
         // CPU 執行
         for _ in 0..1000 {
@@ -132,8 +133,8 @@ fn main() {
         ppu.set_scx(cpu.mmu.read_byte(0xFF43));
         ppu.set_scy(cpu.mmu.read_byte(0xFF42));
         ppu.set_wx(cpu.mmu.read_byte(0xFF4B));
-        ppu.set_wy(cpu.mmu.read_byte(0xFF4A));
-        // ppu.set_lcdc(cpu.mmu.read_byte(0xFF40)); // 不再重設 PPU LCDC，避免被 ROM 關閉
+        ppu.set_wy(cpu.mmu.read_byte(0xFF4A)); // 確保 LCDC 設置正確，使用之前已修正的值
+        ppu.set_lcdc(fixed_lcdc); // 使用已經修正過的LCDC值
 
         // 執行 PPU 渲染
         ppu.step();
