@@ -13,6 +13,7 @@ mod apu;
 use crate::apu::APU;
 mod joypad;
 use crate::joypad::Joypad;
+use crate::joypad::GameBoyKey;
 mod timer;
 use crate::timer::Timer;
 
@@ -28,7 +29,7 @@ fn main() {
     let mut cpu = CPU::new(mmu);
     let mut ppu = PPU::new();
     let _apu = APU::new();
-    let _joypad = Joypad::new();
+    let mut joypad = Joypad::new();
     let _timer = Timer::new();
 
     println!("✅ 系統組件初始化完成");
@@ -154,15 +155,126 @@ fn main() {
 
     println!("🚀 開始模擬循環..."); // 主模擬循環
     while window.is_open() && !window.is_key_down(Key::Escape) {
+        // === 按鍵處理區塊 ===
+        let mut joypad_updated = false;
+        
+        // 方向鍵處理
+        if window.is_key_down(Key::Up) || window.is_key_down(Key::W) {
+            if !joypad.is_key_pressed(&GameBoyKey::Up) {
+                joypad.key_down(GameBoyKey::Up);
+                println!("🔼 按下 上鍵");
+                joypad_updated = true;
+            }
+        } else if joypad.is_key_pressed(&GameBoyKey::Up) {
+            joypad.key_up(GameBoyKey::Up);
+            joypad_updated = true;
+        }
+        
+        if window.is_key_down(Key::Down) || window.is_key_down(Key::S) {
+            if !joypad.is_key_pressed(&GameBoyKey::Down) {
+                joypad.key_down(GameBoyKey::Down);
+                println!("🔽 按下 下鍵");
+                joypad_updated = true;
+            }
+        } else if joypad.is_key_pressed(&GameBoyKey::Down) {
+            joypad.key_up(GameBoyKey::Down);
+            joypad_updated = true;
+        }
+        
+        if window.is_key_down(Key::Left) || window.is_key_down(Key::A) {
+            if !joypad.is_key_pressed(&GameBoyKey::Left) {
+                joypad.key_down(GameBoyKey::Left);
+                println!("◀️ 按下 左鍵");
+                joypad_updated = true;
+            }
+        } else if joypad.is_key_pressed(&GameBoyKey::Left) {
+            joypad.key_up(GameBoyKey::Left);
+            joypad_updated = true;
+        }
+        
+        if window.is_key_down(Key::Right) || window.is_key_down(Key::D) {
+            if !joypad.is_key_pressed(&GameBoyKey::Right) {
+                joypad.key_down(GameBoyKey::Right);
+                println!("▶️ 按下 右鍵");
+                joypad_updated = true;
+            }
+        } else if joypad.is_key_pressed(&GameBoyKey::Right) {
+            joypad.key_up(GameBoyKey::Right);
+            joypad_updated = true;
+        }
+        
+        // A/B 按鈕處理
+        if window.is_key_down(Key::J) || window.is_key_down(Key::Z) {
+            if !joypad.is_key_pressed(&GameBoyKey::A) {
+                joypad.key_down(GameBoyKey::A);
+                println!("🅰️ 按下 A按鈕");
+                joypad_updated = true;
+            }
+        } else if joypad.is_key_pressed(&GameBoyKey::A) {
+            joypad.key_up(GameBoyKey::A);
+            joypad_updated = true;
+        }
+        
+        if window.is_key_down(Key::K) || window.is_key_down(Key::X) {
+            if !joypad.is_key_pressed(&GameBoyKey::B) {
+                joypad.key_down(GameBoyKey::B);
+                println!("🅱️ 按下 B按鈕");
+                joypad_updated = true;
+            }
+        } else if joypad.is_key_pressed(&GameBoyKey::B) {
+            joypad.key_up(GameBoyKey::B);
+            joypad_updated = true;
+        }
+        
+        // Select/Start 按鈕處理
+        if window.is_key_down(Key::Space) {
+            if !joypad.is_key_pressed(&GameBoyKey::Select) {
+                joypad.key_down(GameBoyKey::Select);
+                println!("📱 按下 Select");
+                joypad_updated = true;
+            }
+        } else if joypad.is_key_pressed(&GameBoyKey::Select) {
+            joypad.key_up(GameBoyKey::Select);
+            joypad_updated = true;
+        }
+        
+        if window.is_key_down(Key::Enter) {
+            if !joypad.is_key_pressed(&GameBoyKey::Start) {
+                joypad.key_down(GameBoyKey::Start);
+                println!("▶️ 按下 Start");
+                joypad_updated = true;
+            }
+        } else if joypad.is_key_pressed(&GameBoyKey::Start) {
+            joypad.key_up(GameBoyKey::Start);
+            joypad_updated = true;
+        }
+        
+        // 調試按鍵（使用 is_key_pressed 而不是 is_key_down，避免重複觸發）
+        static mut LAST_T_STATE: bool = false;
+        let current_t_state = window.is_key_down(Key::T);
+        unsafe {
+            if current_t_state && !LAST_T_STATE {
+                println!("\n📊 當前按鍵狀態:");
+                println!("{}", joypad.generate_status_report());
+            }
+            LAST_T_STATE = current_t_state;
+        }
+        
+        // 更新手柄狀態並同步到MMU
+        if joypad_updated {
+            joypad.update();
+            
+            // 同步手柄狀態到MMU的0xFF00寄存器
+            let joypad_register = joypad.read_register();
+            cpu.mmu.write_byte(0xFF00, joypad_register);
+        }
+
         // 確保 LCDC 設定正確，僅保證 LCD 顯示始終啟用
-        let lcdc_value = cpu.mmu.read_byte(0xFF40); // 優化的 LCDC 保護策略：
-                                                    // 1. 確保 LCD 顯示始終開啟 (位元 7)
-                                                    // 2. 確保背景顯示始終開啟 (位元 0)
-                                                    // 3. 其餘位元保留 ROM 的原始設置，允許遊戲靈活控制顯示功能
+        let lcdc_value = cpu.mmu.read_byte(0xFF40);
         let fixed_lcdc = lcdc_value | 0x81; // 強制開啟 LCD 顯示和背景顯示
 
         if fixed_lcdc != lcdc_value {
-            cpu.mmu.write_byte(0xFF40, fixed_lcdc); // 輸出更詳細的日誌
+            cpu.mmu.write_byte(0xFF40, fixed_lcdc);
             let lcd_changed = (lcdc_value & 0x80) == 0;
             let bg_changed = (lcdc_value & 0x01) == 0;
             if lcd_changed || bg_changed {
@@ -205,18 +317,21 @@ fn main() {
         let vram_data = cpu.mmu.vram();
         ppu.vram.copy_from_slice(&vram_data);
 
-        // 設置 PPU 參數        ppu.set_oam(cpu.mmu.oam());
+        // 設置 PPU 參數
+        ppu.set_oam(cpu.mmu.oam());
         ppu.set_bgp(cpu.mmu.read_byte(0xFF47));
         ppu.set_obp0(cpu.mmu.read_byte(0xFF48));
-        ppu.set_obp1(cpu.mmu.read_byte(0xFF49)); // 設置 OBP1 調色板
+        ppu.set_obp1(cpu.mmu.read_byte(0xFF49));
         ppu.set_scx(cpu.mmu.read_byte(0xFF43));
         ppu.set_scy(cpu.mmu.read_byte(0xFF42));
         ppu.set_wx(cpu.mmu.read_byte(0xFF4B));
-        ppu.set_wy(cpu.mmu.read_byte(0xFF4A)); // 確保 LCDC 設置正確，使用之前已修正的值
-        ppu.set_lcdc(fixed_lcdc); // 使用已經修正過的LCDC值
+        ppu.set_wy(cpu.mmu.read_byte(0xFF4A));
+        ppu.set_lcdc(fixed_lcdc);
 
         // 執行 PPU 渲染
-        ppu.step(); // 獲取並顯示 FPS
+        ppu.step();
+        
+        // 獲取並顯示 FPS
         let fps = ppu.get_fps();
         if fps > 0 {
             let title = format!("Game Boy 模擬器 - {} FPS - {}", fps, rom_file);
@@ -224,9 +339,9 @@ fn main() {
         }
 
         // 更新窗口
-        window
-            .update_with_buffer(ppu.get_framebuffer(), 160, 144)
-            .unwrap(); // 輸出 PPU 調試信息
+        window.update_with_buffer(ppu.get_framebuffer(), 160, 144).unwrap();
+        
+        // 輸出 PPU 調試信息
         let debug_info = ppu.debug_info(frame_count);
         if !debug_info.is_empty() {
             println!("{}", debug_info);
@@ -246,7 +361,7 @@ fn main() {
         // 每幀強制設置調色板為標準值，避免遊戲將其設為 0
         let current_bgp = cpu.mmu.read_byte(0xFF47);
         if current_bgp == 0 {
-            cpu.mmu.write_byte(0xFF47, standard_palette); // 重置為標準調色板
+            cpu.mmu.write_byte(0xFF47, standard_palette);
             ppu.set_bgp(standard_palette);
             println!("🎨 檢測到調色板被重置為0，已恢復為標準值 (0xE4)");
         }
@@ -255,6 +370,11 @@ fn main() {
     }
 
     println!("🎉 Game Boy 模擬器結束");
+
+    // 生成最終手柄報告
+    joypad.save_final_report();
+    println!("✅ 手柄測試完成！調試報告已保存");
+
     println!("📊 總幀數: {}", frame_count);
 }
 

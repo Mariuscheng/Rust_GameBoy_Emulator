@@ -158,6 +158,39 @@ impl Joypad {
         }
     }
 
+    // 添加寫入寄存器方法（處理MMU對0xFF00的寫入）
+    pub fn write_register(&mut self, value: u8) {
+        // 只有低兩位可以被寫入，用於選擇按鍵組
+        self.select_direction = (value & 0x10) == 0;  // 位4為0時選擇方向鍵
+        self.select_action = (value & 0x20) == 0;     // 位5為0時選擇動作鍵
+        
+        //self.log_event(&format!("寄存器寫入: 0x{:02X}, 方向鍵選擇: {}, 動作鍵選擇: {}", 
+        //                        value, self.select_direction, self.select_action));
+    }
+
+    // 改進讀取寄存器方法
+    pub fn read_register(&self) -> u8 {
+        let mut result = 0xFF; // 初始值為全1
+
+        // 設置選擇位
+        if !self.select_direction {
+            result &= !0x10; // 清除位4
+        }
+        if !self.select_action {
+            result &= !0x20; // 清除位5
+        }
+
+        // 根據選擇返回對應的按鍵狀態
+        if self.select_direction {
+            result = (result & 0xF0) | (self.direction_keys & 0x0F);
+        }
+        if self.select_action {
+            result = (result & 0xF0) | (self.action_keys & 0x0F);
+        }
+
+        result
+    }
+
     // 獲取當前手柄狀態（用於與MMU交互）
     pub fn get_joypad_state(&self) -> u8 {
         // 返回組合的手柄狀態
@@ -174,6 +207,20 @@ impl Joypad {
             return true;
         }
         false
+    }
+
+    // 檢查特定按鍵是否被按下
+    pub fn is_key_pressed(&self, key: &GameBoyKey) -> bool {
+        match key {
+            GameBoyKey::Right => (self.direction_keys & 0x01) == 0,
+            GameBoyKey::Left => (self.direction_keys & 0x02) == 0,
+            GameBoyKey::Up => (self.direction_keys & 0x04) == 0,
+            GameBoyKey::Down => (self.direction_keys & 0x08) == 0,
+            GameBoyKey::A => (self.action_keys & 0x01) == 0,
+            GameBoyKey::B => (self.action_keys & 0x02) == 0,
+            GameBoyKey::Select => (self.action_keys & 0x04) == 0,
+            GameBoyKey::Start => (self.action_keys & 0x08) == 0,
+        }
     }
 
     // 調試日誌：按鍵事件
