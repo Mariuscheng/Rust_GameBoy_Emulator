@@ -70,15 +70,50 @@ fn main() {
     // 顯示 VRAM 分析
     println!("🧩 {}", cpu.mmu.analyze_vram_content());
 
+    // 新增 VRAM 詳細分析
+    println!("🔍 VRAM 詳細分析:");
+    let vram_data = cpu.mmu.vram();
+    let non_zero_count = vram_data.iter().filter(|&&b| b != 0).count();
+    println!(
+        "  - 非零字節: {} / {} 字節",
+        non_zero_count,
+        vram_data.len()
+    );
+
+    // 顯示前 256 個字節的樣本
+    if non_zero_count > 0 {
+        println!("  - VRAM 前 16 個字節樣本:");
+        for i in 0..16 {
+            if i < vram_data.len() && vram_data[i] != 0 {
+                println!("    位置 0x{:04X}: 0x{:02X}", i, vram_data[i]);
+            }
+        }
+    }
+
     // 讓系統執行一段時間以啟動 ROM 初始化例程
     println!("🔄 執行 ROM 初始化例程...");
-    for _ in 0..100000 {
+    for i in 0..500000 {
         cpu.step();
+
+        if i % 100000 == 0 {
+            println!("💾 初始化進度: {} 指令", i);
+            // 檢查 VRAM 狀態
+            let vram_usage = cpu.mmu.vram().iter().filter(|&&b| b != 0).count();
+            if vram_usage > 0 {
+                println!("🧩 VRAM 已開始載入: {} 字節非零", vram_usage);
+            }
+        }
     }
     println!("✅ 初始化過程完成");
 
-    // 寫入測試圖案到 VRAM，避免白屏（僅測試用）
-    // cpu.mmu.write_test_pattern_to_vram(); // 移除這行，讓 ROM 自己初始化 VRAM，顯示遊戲畫面
+    // 檢查 Tetris ROM 是否正確載入了 VRAM 數據
+    let vram_data = cpu.mmu.vram();
+    let non_zero_count = vram_data.iter().filter(|&&b| b != 0).count();
+    println!(
+        "🎮 Tetris VRAM 數據檢查: {} / {} 字節非零",
+        non_zero_count,
+        vram_data.len()
+    );
 
     // 創建窗口
     println!("🪟 正在創建顯示窗口...");
@@ -101,40 +136,46 @@ fn main() {
        // - Bit 0: BG & Window 顯示開啟 (1)
     let initial_lcdc = 0x91;
     cpu.mmu.write_byte(0xFF40, initial_lcdc);
-    ppu.set_lcdc(initial_lcdc);
-
-    // 設置 BGP 為標準 Game Boy 調色板
-    // 0xE4 (11100100) = %11 %10 %01 %00 的顏色值順序，即：
-    // - 顏色 3 = 黑 (11)
-    // - 顏色 2 = 深灰 (10)
-    // - 顏色 1 = 淺灰 (01)
-    // - 顏色 0 = 白 (00)
+    ppu.set_lcdc(initial_lcdc); // 設置 BGP 為標準 Game Boy 調色板
+                                // 0xE4 (11100100) = %11 %10 %01 %00 的顏色值順序，即：
+                                // - 顏色 3 = 黑 (11)
+                                // - 顏色 2 = 深灰 (10)
+                                // - 顏色 1 = 淺灰 (01)
+                                // - 顏色 0 = 白 (00)
     let standard_palette = 0xE4;
     cpu.mmu.write_byte(0xFF47, standard_palette);
+
+    // 確保所有其他顯示相關寄存器被設置
+    cpu.mmu.write_byte(0xFF48, standard_palette); // OBP0
+    cpu.mmu.write_byte(0xFF49, standard_palette); // OBP1
 
     let mut frame_count = 0;
     let mut cycle_count = 0;
 
     println!("🚀 開始模擬循環..."); // 主模擬循環
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        // 確保 LCDC 設定正確，保持顯示啟用和關鍵系統設置
-        let lcdc_value = cpu.mmu.read_byte(0xFF40);
-
-        // 保留 ROM 設置的大部分位元，但確保關鍵功能開啟
-        // 1. 始終開啟 LCD 顯示 (位元 7)
-        // 2. 始終開啟背景顯示 (位元 0)
-        // 3. 設置正確的瓦片數據地址 (位元 4)
-        // 4. 確保精靈顯示開啟 (位元 1)
-        let fixed_lcdc = lcdc_value | 0x91; // 開啟 LCD，BG 和精靈顯示，使用 $8000-$8FFF
+        // 確保 LCDC 設定正確，僅保證 LCD 顯示始終啟用
+        let lcdc_value = cpu.mmu.read_byte(0xFF40); // 優化的 LCDC 保護策略：
+                                                    // 1. 確保 LCD 顯示始終開啟 (位元 7)
+                                                    // 2. 確保背景顯示始終開啟 (位元 0)
+                                                    // 3. 其餘位元保留 ROM 的原始設置，允許遊戲靈活控制顯示功能
+        let fixed_lcdc = lcdc_value | 0x81; // 強制開啟 LCD 顯示和背景顯示
 
         if fixed_lcdc != lcdc_value {
-            cpu.mmu.write_byte(0xFF40, fixed_lcdc);
-            // 只在重要變更時或每100幀顯示一次日誌
-            if (lcdc_value & 0x80) == 0 || (lcdc_value & 0x01) == 0 || frame_count % 100 == 0 {
+            cpu.mmu.write_byte(0xFF40, fixed_lcdc); // 輸出更詳細的日誌
+            let lcd_changed = (lcdc_value & 0x80) == 0;
+            let bg_changed = (lcdc_value & 0x01) == 0;
+            if lcd_changed || bg_changed {
                 println!(
-                    "⚡ LCDC 修正 (幀 {}): 0x{:02X} -> 0x{:02X}",
+                    "⚡ LCDC 修正 (幀 {}): 顯示設置被調整 (0x{:02X} -> 0x{:02X})",
                     frame_count, lcdc_value, fixed_lcdc
                 );
+                if lcd_changed {
+                    println!("  - LCD 顯示被強制開啟");
+                }
+                if bg_changed {
+                    println!("  - 背景顯示被強制開啟");
+                }
             }
         }
         ppu.set_lcdc(fixed_lcdc);
@@ -185,12 +226,29 @@ fn main() {
         // 更新窗口
         window
             .update_with_buffer(ppu.get_framebuffer(), 160, 144)
-            .unwrap();
-
-        // 輸出 PPU 調試信息
+            .unwrap(); // 輸出 PPU 調試信息
         let debug_info = ppu.debug_info(frame_count);
         if !debug_info.is_empty() {
             println!("{}", debug_info);
+
+            // 每 200 幀檢查 VRAM 狀態（僅用於調試，不干預）
+            if frame_count % 200 == 0 {
+                let vram_data = cpu.mmu.vram();
+                let non_zero_count = vram_data.iter().filter(|&&b| b != 0).count();
+                println!(
+                    "🎮 VRAM 狀態: {} / {} 字節非零",
+                    non_zero_count,
+                    vram_data.len()
+                );
+            }
+        }
+
+        // 每幀強制設置調色板為標準值，避免遊戲將其設為 0
+        let current_bgp = cpu.mmu.read_byte(0xFF47);
+        if current_bgp == 0 {
+            cpu.mmu.write_byte(0xFF47, standard_palette); // 重置為標準調色板
+            ppu.set_bgp(standard_palette);
+            println!("🎨 檢測到調色板被重置為0，已恢復為標準值 (0xE4)");
         }
 
         frame_count += 1;
