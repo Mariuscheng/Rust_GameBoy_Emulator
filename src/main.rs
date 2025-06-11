@@ -104,16 +104,16 @@ fn main() {
             }
         }
     }
-    println!("✅ 初始化過程完成");
-
-    // 檢查 Tetris ROM 是否正確載入了 VRAM 數據
+    println!("✅ 初始化過程完成"); // 檢查 Tetris ROM 是否正確載入了 VRAM 數據
     let vram_data = cpu.mmu.vram();
     let non_zero_count = vram_data.iter().filter(|&&b| b != 0).count();
     println!(
         "🎮 Tetris VRAM 數據檢查: {} / {} 字節非零",
         non_zero_count,
         vram_data.len()
-    );
+    ); // 進行垂直線條問題分析
+    println!("🔍 進行VRAM分析以診斷垂直線條問題...");
+    analyze_vram_data(&vram_data);
 
     // 創建窗口
     println!("🪟 正在創建顯示窗口...");
@@ -256,4 +256,150 @@ fn main() {
 
     println!("🎉 Game Boy 模擬器結束");
     println!("📊 總幀數: {}", frame_count);
+}
+
+// VRAM 分析函數
+fn analyze_vram_data(vram_data: &[u8]) {
+    println!("\n=== VRAM 垂直線條問題分析 ===");
+
+    // 檢查背景瓦片地圖區域
+    let lcdc = 0x91; // 假設LCDC值
+    let bg_tile_map_base = if (lcdc & 0x08) != 0 {
+        0x1C00 // $9C00-$9FFF
+    } else {
+        0x1800 // $9800-$9BFF
+    };
+
+    println!("背景瓦片地圖基址: 0x{:04X}", 0x8000 + bg_tile_map_base);
+
+    // 檢查前幾個瓦片ID
+    print!("前16個背景瓦片ID: ");
+    for i in 0..16 {
+        if bg_tile_map_base + i < vram_data.len() {
+            print!("{:02X} ", vram_data[bg_tile_map_base + i]);
+        }
+    }
+    println!();
+
+    // 檢查瓦片數據模式
+    let uses_unsigned_tiles = (lcdc & 0x10) != 0;
+    println!(
+        "瓦片數據模式: {}",
+        if uses_unsigned_tiles {
+            "無符號 (0x8000-0x8FFF)"
+        } else {
+            "有符號 (0x8800-0x97FF)"
+        }
+    );
+
+    // 分析瓦片ID 0x00的數據
+    analyze_tile_pattern_simple(vram_data, 0x00, uses_unsigned_tiles);
+
+    // 檢查VRAM數據分布
+    analyze_vram_distribution_simple(vram_data);
+}
+
+fn analyze_tile_pattern_simple(vram_data: &[u8], tile_id: u8, uses_unsigned: bool) {
+    let tile_data_addr = if uses_unsigned {
+        (tile_id as usize) * 16
+    } else {
+        let signed_id = tile_id as i8;
+        0x1000 + ((signed_id as i16) + 128) as usize * 16
+    };
+
+    println!(
+        "\n瓦片 ID 0x{:02X} (地址 0x{:04X}):",
+        tile_id,
+        0x8000 + tile_data_addr
+    );
+
+    if tile_data_addr + 15 >= vram_data.len() {
+        println!("  地址超出VRAM範圍!");
+        return;
+    }
+
+    // 檢查是否全零
+    let mut all_zero = true;
+    let mut has_vertical_pattern = true;
+
+    for row in 0..8 {
+        if tile_data_addr + row * 2 + 1 < vram_data.len() {
+            let low_byte = vram_data[tile_data_addr + row * 2];
+            let high_byte = vram_data[tile_data_addr + row * 2 + 1];
+
+            if low_byte != 0 || high_byte != 0 {
+                all_zero = false;
+            }
+
+            // 檢查垂直線條模式
+            if low_byte != 0xAA && low_byte != 0x55 && low_byte != 0xFF && low_byte != 0x00 {
+                has_vertical_pattern = false;
+            }
+        }
+    }
+
+    if all_zero {
+        println!("  模式: 全零 (空瓦片) - 這會導致白屏或單色顯示");
+    } else if has_vertical_pattern {
+        println!("  模式: 垂直線條模式 (可能導致直紋)");
+    } else {
+        println!("  模式: 正常圖案");
+    }
+
+    // 顯示前兩行的位模式
+    if tile_data_addr + 3 < vram_data.len() {
+        let row0_low = vram_data[tile_data_addr];
+        let row0_high = vram_data[tile_data_addr + 1];
+
+        println!("  第0行: {:08b} {:08b}", row0_low, row0_high);
+
+        // 解析像素顏色
+        print!("  第0行像素: ");
+        for bit in (0..8).rev() {
+            let low_bit = (row0_low >> bit) & 1;
+            let high_bit = (row0_high >> bit) & 1;
+            let color_id = (high_bit << 1) | low_bit;
+            print!("{}", color_id);
+        }
+        println!();
+    }
+}
+
+fn analyze_vram_distribution_simple(vram_data: &[u8]) {
+    println!("\nVRAM數據分布分析:");
+
+    let mut zero_count = 0;
+    let mut pattern_counts = [0; 256];
+
+    for &byte in vram_data {
+        if byte == 0 {
+            zero_count += 1;
+        }
+        pattern_counts[byte as usize] += 1;
+    }
+
+    let zero_percentage = zero_count as f32 / vram_data.len() as f32 * 100.0;
+    println!("  零字節: {} ({:.1}%)", zero_count, zero_percentage);
+
+    if zero_percentage > 95.0 {
+        println!("  ⚠️ 警告: VRAM中95%以上的數據為零!");
+        println!("     這表明Tetris ROM的瓦片數據可能沒有正確載入到VRAM中。");
+        println!("     直紋問題可能是因為瓦片數據為空，導致PPU渲染空瓦片。");
+    }
+
+    // 找出最常見的模式
+    let mut sorted_patterns: Vec<(u8, usize)> = pattern_counts
+        .iter()
+        .enumerate()
+        .map(|(i, &count)| (i as u8, count))
+        .filter(|(_, count)| *count > 0)
+        .collect();
+    sorted_patterns.sort_by(|a, b| b.1.cmp(&a.1));
+
+    println!("  最常見的位模式:");
+    for (pattern, count) in sorted_patterns.iter().take(5) {
+        if *count > 0 {
+            println!("    0x{:02X} ({:08b}): {}次", pattern, pattern, count);
+        }
+    }
 }
