@@ -466,6 +466,7 @@ impl CPU {
             } // LD DE,d16
             // 新增指令: LD A,(DE)
             0x1A => {
+                // LD A,(DE) - 從 DE 指向的記憶體讀取到 A
                 let addr = ((self.registers.d as u16) << 8) | (self.registers.e as u16);
                 self.registers.a = self.mmu.read_byte(addr);
             } // LD A,(DE)

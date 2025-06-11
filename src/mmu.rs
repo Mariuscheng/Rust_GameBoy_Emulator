@@ -403,6 +403,14 @@ impl MMU {
         )
     }
 
+    pub fn get_rom_title(&self) -> Option<String> {
+        if self.rom_state == RomState::Valid || self.rom_state == RomState::Invalid {
+            Some(self.rom_info.title.clone())
+        } else {
+            None
+        }
+    }
+
     pub fn read_byte(&mut self, addr: u16) -> u8 {
         self.rom_read_count += 1;
 
@@ -833,5 +841,20 @@ impl MMU {
         println!("  - Tile 1: 棋盤模式");
         println!("  - Tile 2: 水平條紋");
         println!("  - 背景地圖設定為循環使用這些瓦片");
+    }
+
+    // 檢查 ROM 哈希值，用於驗證完整性
+    pub fn verify_rom_integrity(&self) -> Option<String> {
+        if self.rom.is_empty() || self.rom_state != RomState::Valid {
+            return None;
+        }
+        
+        // 計算簡單的校驗和
+        let mut checksum: u32 = 0;
+        for (i, &byte) in self.rom.iter().enumerate().take(0x8000) {
+            checksum = checksum.wrapping_add(byte as u32 * (i as u32 + 1));
+        }
+        
+        Some(format!("{:08X}", checksum))
     }
 }

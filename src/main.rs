@@ -55,6 +55,28 @@ fn main() {
 
     cpu.load_rom(&rom_data);
 
+    // 檢查並顯示 ROM 標題
+    if let Some(title) = cpu.mmu.get_rom_title() {
+        println!("📦 ROM 標題: {}", title);
+    } else {
+        println!("⚠️ 未能讀取 ROM 標題");
+    }
+
+    // 驗證 ROM 完整性
+    if let Some(checksum) = cpu.mmu.verify_rom_integrity() {
+        println!("📊 ROM 校驗和: {}", checksum);
+    }
+
+    // 顯示 VRAM 分析
+    println!("🧩 {}", cpu.mmu.analyze_vram_content());
+
+    // 讓系統執行一段時間以啟動 ROM 初始化例程
+    println!("🔄 執行 ROM 初始化例程...");
+    for _ in 0..100000 {
+        cpu.step();
+    }
+    println!("✅ 初始化過程完成");
+
     // 寫入測試圖案到 VRAM，避免白屏（僅測試用）
     // cpu.mmu.write_test_pattern_to_vram(); // 移除這行，讓 ROM 自己初始化 VRAM，顯示遊戲畫面
 
@@ -72,26 +94,42 @@ fn main() {
             println!("   cargo run --bin clean_test");
             std::process::exit(1);
         }
-    };
+    }; // 設置 LCDC 寄存器初始值
+       // 0x91 (10010001):
+       // - Bit 7: LCD 顯示開啟 (1)
+       // - Bit 4: BG & Window Tile Data ($8000-$8FFF) (1)
+       // - Bit 0: BG & Window 顯示開啟 (1)
+    let initial_lcdc = 0x91;
+    cpu.mmu.write_byte(0xFF40, initial_lcdc);
+    ppu.set_lcdc(initial_lcdc);
 
-    // 啟動時強制設置 LCDC 為 0x91，確保 LCD 與 BG 開啟
-    cpu.mmu.write_byte(0xFF40, 0x91);
-    ppu.set_lcdc(0x91);
-
-    // 強制設置 BGP 為標準 Game Boy 色階
-    cpu.mmu.write_byte(0xFF47, 0xE4);
+    // 設置 BGP 為標準 Game Boy 調色板
+    // 0xE4 (11100100) = %11 %10 %01 %00 的顏色值順序，即：
+    // - 顏色 3 = 黑 (11)
+    // - 顏色 2 = 深灰 (10)
+    // - 顏色 1 = 淺灰 (01)
+    // - 顏色 0 = 白 (00)
+    let standard_palette = 0xE4;
+    cpu.mmu.write_byte(0xFF47, standard_palette);
 
     let mut frame_count = 0;
     let mut cycle_count = 0;
 
     println!("🚀 開始模擬循環..."); // 主模擬循環
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        // 確保 LCDC 始終啟用 LCD 顯示和背景，但降低日誌頻率
+        // 確保 LCDC 設定正確，保持顯示啟用和關鍵系統設置
         let lcdc_value = cpu.mmu.read_byte(0xFF40);
-        let fixed_lcdc = lcdc_value | 0x91; // 設置第 7 位 (LCD 開啟) 和第 0 位 (背景開啟)
+
+        // 保留 ROM 設置的大部分位元，但確保關鍵功能開啟
+        // 1. 始終開啟 LCD 顯示 (位元 7)
+        // 2. 始終開啟背景顯示 (位元 0)
+        // 3. 設置正確的瓦片數據地址 (位元 4)
+        // 4. 確保精靈顯示開啟 (位元 1)
+        let fixed_lcdc = lcdc_value | 0x91; // 開啟 LCD，BG 和精靈顯示，使用 $8000-$8FFF
+
         if fixed_lcdc != lcdc_value {
             cpu.mmu.write_byte(0xFF40, fixed_lcdc);
-            // 只在重要變更時或每100幀顯示一次日誌，降低噪音
+            // 只在重要變更時或每100幀顯示一次日誌
             if (lcdc_value & 0x80) == 0 || (lcdc_value & 0x01) == 0 || frame_count % 100 == 0 {
                 println!(
                     "⚡ LCDC 修正 (幀 {}): 0x{:02X} -> 0x{:02X}",
@@ -126,10 +164,10 @@ fn main() {
         let vram_data = cpu.mmu.vram();
         ppu.vram.copy_from_slice(&vram_data);
 
-        // 設置 PPU 參數
-        ppu.set_oam(cpu.mmu.oam());
+        // 設置 PPU 參數        ppu.set_oam(cpu.mmu.oam());
         ppu.set_bgp(cpu.mmu.read_byte(0xFF47));
         ppu.set_obp0(cpu.mmu.read_byte(0xFF48));
+        ppu.set_obp1(cpu.mmu.read_byte(0xFF49)); // 設置 OBP1 調色板
         ppu.set_scx(cpu.mmu.read_byte(0xFF43));
         ppu.set_scy(cpu.mmu.read_byte(0xFF42));
         ppu.set_wx(cpu.mmu.read_byte(0xFF4B));
@@ -137,12 +175,24 @@ fn main() {
         ppu.set_lcdc(fixed_lcdc); // 使用已經修正過的LCDC值
 
         // 執行 PPU 渲染
-        ppu.step();
+        ppu.step(); // 獲取並顯示 FPS
+        let fps = ppu.get_fps();
+        if fps > 0 {
+            let title = format!("Game Boy 模擬器 - {} FPS - {}", fps, rom_file);
+            window.set_title(&title);
+        }
 
         // 更新窗口
         window
             .update_with_buffer(ppu.get_framebuffer(), 160, 144)
             .unwrap();
+
+        // 輸出 PPU 調試信息
+        let debug_info = ppu.debug_info(frame_count);
+        if !debug_info.is_empty() {
+            println!("{}", debug_info);
+        }
+
         frame_count += 1;
     }
 
