@@ -72,8 +72,10 @@ impl CPU {
         let result = a.wrapping_add(value).wrapping_add(carry);
         self.registers.set_z_flag(result == 0);
         self.registers.set_n_flag(false);
-        self.registers.set_h_flag(((a & 0xF) + (value & 0xF) + carry) > 0xF);
-        self.registers.set_c_flag((a as u16 + value as u16 + carry as u16) > 0xFF);
+        self.registers
+            .set_h_flag(((a & 0xF) + (value & 0xF) + carry) > 0xF);
+        self.registers
+            .set_c_flag((a as u16 + value as u16 + carry as u16) > 0xFF);
         self.registers.a = result;
     }
 
@@ -95,8 +97,10 @@ impl CPU {
         let result = a.wrapping_sub(value).wrapping_sub(carry);
         self.registers.set_z_flag(result == 0);
         self.registers.set_n_flag(true);
-        self.registers.set_h_flag((a & 0xF) < ((value & 0xF) + carry));
-        self.registers.set_c_flag((a as u16) < (value as u16 + carry as u16));
+        self.registers
+            .set_h_flag((a & 0xF) < ((value & 0xF) + carry));
+        self.registers
+            .set_c_flag((a as u16) < (value as u16 + carry as u16));
         self.registers.a = result;
     }
 
@@ -173,7 +177,11 @@ impl CPU {
 
     // RR: Rotate Right through Carry
     fn rr(&mut self, value: u8) -> u8 {
-        let c = if (self.registers.f & 0x10) != 0 { 0x80 } else { 0 };
+        let c = if (self.registers.f & 0x10) != 0 {
+            0x80
+        } else {
+            0
+        };
         let result = (value >> 1) | c;
         self.registers.set_z_flag(result == 0);
         self.registers.set_n_flag(false);
@@ -270,10 +278,90 @@ impl CPU {
         match opcode {
             // 移除重複分支：0x44、0x76、0x78~0x7F、0x20（保留 0x40~0x7F 區塊與靠近 0x18 的 0x20）
             0x00 => {} // NOP
-            0x3C => {self.registers.a = self.registers.a.wrapping_add(1);} // INC A
-            0x3D => { self.registers.a = self.registers.a.wrapping_sub(1);} // DEC A
-            0x04 => {self.registers.b = self.registers.b.wrapping_add(1);} // INC B
-            0x05 => {self.registers.b = self.registers.b.wrapping_sub(1);} // DEC B
+            // 新增指令: LD BC,d16
+            0x01 => {
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                self.registers.c = lo as u8;
+                self.registers.b = hi as u8;
+            } // LD BC,d16
+            // 新增指令: LD (BC),A
+            0x02 => {
+                let addr = ((self.registers.b as u16) << 8) | (self.registers.c as u16);
+                self.mmu.write_byte(addr, self.registers.a);
+            } // LD (BC),A
+            // 新增指令: DEC BC
+            0x0B => {
+                let bc = ((self.registers.b as u16) << 8) | (self.registers.c as u16);
+                let result = bc.wrapping_sub(1);
+                self.registers.b = (result >> 8) as u8;
+                self.registers.c = result as u8;
+            } // DEC BC
+            // 新增指令: INC DE
+            0x13 => {
+                let de = ((self.registers.d as u16) << 8) | (self.registers.e as u16);
+                let result = de.wrapping_add(1);
+                self.registers.d = (result >> 8) as u8;
+                self.registers.e = result as u8;
+            } // INC DE
+            // 新增指令: LD (DE),A
+            0x12 => {
+                let addr = ((self.registers.d as u16) << 8) | (self.registers.e as u16);
+                self.mmu.write_byte(addr, self.registers.a);
+            } // LD (DE),A
+            // 新增指令: LD HL,d16
+            0x21 => {
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                self.registers.l = lo as u8;
+                self.registers.h = hi as u8;
+            } // LD HL,d16
+            // 新增指令: LD (HL+),A
+            0x22 => {
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.mmu.write_byte(addr, self.registers.a);
+                let result = addr.wrapping_add(1);
+                self.registers.h = (result >> 8) as u8;
+                self.registers.l = result as u8;
+            } // LD (HL+),A
+            // 新增指令: LD A,(HL+)
+            0x2A => {
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.registers.a = self.mmu.read_byte(addr);
+                let result = addr.wrapping_add(1);
+                self.registers.h = (result >> 8) as u8;
+                self.registers.l = result as u8;
+            } // LD A,(HL+)
+            // 新增指令: LD (HL-),A
+            0x32 => {
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                self.mmu.write_byte(addr, self.registers.a);
+                let result = addr.wrapping_sub(1);
+                self.registers.h = (result >> 8) as u8;
+                self.registers.l = result as u8;
+            } // LD (HL-),A
+            // 新增指令: LD SP,d16
+            0x31 => {
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                self.registers.sp = (hi << 8) | lo;
+            } // LD SP,d16
+            // 新增指令: INC SP
+            0x33 => {
+                self.registers.sp = self.registers.sp.wrapping_add(1);
+            } // INC SP
+            0x3C => {
+                self.registers.a = self.registers.a.wrapping_add(1);
+            } // INC A
+            0x3D => {
+                self.registers.a = self.registers.a.wrapping_sub(1);
+            } // DEC A
+            0x04 => {
+                self.registers.b = self.registers.b.wrapping_add(1);
+            } // INC B
+            0x05 => {
+                self.registers.b = self.registers.b.wrapping_sub(1);
+            } // DEC B
             0x06 => {
                 let n = self.fetch();
                 self.registers.b = n;
@@ -354,6 +442,12 @@ impl CPU {
                 let n = self.fetch();
                 let addr = 0xFF00 + n as u16;
                 self.mmu.write_byte(addr, self.registers.a);
+            }
+            0xF0 => {
+                // LDH A, (n) (從 0xFF00+n 讀取到 A)
+                let n = self.fetch();
+                let addr = 0xFF00 + n as u16;
+                self.registers.a = self.mmu.read_byte(addr);
             }
             0xE2 => {
                 // LD (0xFF00+C), A
@@ -1029,7 +1123,8 @@ impl CPU {
                             4 => self.registers.h,
                             5 => self.registers.l,
                             6 => {
-                                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                                let addr =
+                                    ((self.registers.h as u16) << 8) | (self.registers.l as u16);
                                 self.mmu.read_byte(addr)
                             }
                             7 => self.registers.a,
@@ -1052,7 +1147,8 @@ impl CPU {
                             4 => self.registers.h &= !(1 << bit),
                             5 => self.registers.l &= !(1 << bit),
                             6 => {
-                                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                                let addr =
+                                    ((self.registers.h as u16) << 8) | (self.registers.l as u16);
                                 let v = self.mmu.read_byte(addr) & !(1 << bit);
                                 self.mmu.write_byte(addr, v);
                             }
@@ -1072,7 +1168,8 @@ impl CPU {
                             4 => self.registers.h |= 1 << bit,
                             5 => self.registers.l |= 1 << bit,
                             6 => {
-                                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                                let addr =
+                                    ((self.registers.h as u16) << 8) | (self.registers.l as u16);
                                 let v = self.mmu.read_byte(addr) | (1 << bit);
                                 self.mmu.write_byte(addr, v);
                             }
@@ -1085,6 +1182,52 @@ impl CPU {
                     }
                 }
             }
+            0xC9 => {
+                let lo = self.mmu.read_byte(self.registers.sp);
+                self.registers.sp = self.registers.sp.wrapping_add(1);
+                let hi = self.mmu.read_byte(self.registers.sp);
+                self.registers.sp = self.registers.sp.wrapping_add(1);
+                self.registers.pc = ((hi as u16) << 8) | (lo as u16);
+            } // RET
+            0xCD => {
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                let addr = (hi << 8) | lo;
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu
+                    .write_byte(self.registers.sp, ((self.registers.pc >> 8) & 0xFF) as u8);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                self.registers.pc = addr;
+            } // CALL nn
+            0xCF => {
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu
+                    .write_byte(self.registers.sp, ((self.registers.pc >> 8) & 0xFF) as u8);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                self.registers.pc = 0x0008;
+            } // RST 08H
+            0xE7 => {
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu
+                    .write_byte(self.registers.sp, ((self.registers.pc >> 8) & 0xFF) as u8);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                self.registers.pc = 0x0020;
+            } // RST 20H
+            0xFF => {
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu
+                    .write_byte(self.registers.sp, ((self.registers.pc >> 8) & 0xFF) as u8);
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                self.registers.pc = 0x0038;
+            } // RST 38H
             _ => {
                 println!("未處理的指令: 0x{:02X}", opcode);
             }
