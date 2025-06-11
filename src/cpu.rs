@@ -51,6 +51,9 @@ pub struct CPU {
     pub registers: Registers,
     pub mmu: MMU,
     instruction_count: u64,
+    // 中斷控制
+    pub ime: bool,    // 中斷主開關 (Interrupt Master Enable)
+    pub halted: bool, // CPU 是否處於 HALT 狀態
 }
 
 impl CPU {
@@ -211,6 +214,8 @@ impl CPU {
             registers,
             mmu,
             instruction_count: 0,
+            ime: false,    // 中斷主開關初始化為關閉
+            halted: false, // CPU 初始狀態為未暫停
         }
     }
 
@@ -528,6 +533,17 @@ impl CPU {
                 self.registers.set_z_flag(self.registers.l == 0);
                 self.registers.set_n_flag(true);
                 self.registers.set_h_flag((self.registers.l & 0x0F) == 0x0F);
+            }
+            0x35 => {
+                // DEC (HL) - 遞減HL指向的記憶體值
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                let value = self.mmu.read_byte(addr);
+                let result = value.wrapping_sub(1);
+                self.mmu.write_byte(addr, result);
+
+                self.registers.set_z_flag(result == 0);
+                self.registers.set_n_flag(true);
+                self.registers.set_h_flag((value & 0x0F) == 0);
             }
             0x3D => {
                 // DEC A
@@ -1058,13 +1074,15 @@ impl CPU {
                 let lo = self.fetch() as u16;
                 let hi = self.fetch() as u16;
                 let addr = (hi << 8) | lo;
-                
+
                 // 將當前PC推入堆疊
                 self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
                 self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
-                
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+
                 // 跳轉到目標地址
                 self.registers.pc = addr;
             }
@@ -1086,10 +1104,12 @@ impl CPU {
                 // RST 08H (重啟到地址0x08)
                 // 將當前PC推入堆疊
                 self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
                 self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
-                
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+
                 // 跳轉到0x08
                 self.registers.pc = 0x08;
             }
@@ -1097,10 +1117,12 @@ impl CPU {
                 // RST 38H (重啟到地址0x38)
                 // 將當前PC推入堆疊
                 self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
                 self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
-                
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+
                 // 跳轉到0x38
                 self.registers.pc = 0x38;
             }
@@ -1110,22 +1132,25 @@ impl CPU {
                 // DAA (十進制調整累加器)
                 let mut a = self.registers.a;
                 let mut adjust = 0;
-                
-                if (self.registers.f & 0x20) != 0 || (!((self.registers.f & 0x40) != 0) && (a & 0x0F) > 9) {
+
+                if (self.registers.f & 0x20) != 0
+                    || (!((self.registers.f & 0x40) != 0) && (a & 0x0F) > 9)
+                {
                     adjust |= 0x06;
                 }
-                
-                if (self.registers.f & 0x10) != 0 || (!((self.registers.f & 0x40) != 0) && a > 0x99) {
+
+                if (self.registers.f & 0x10) != 0 || (!((self.registers.f & 0x40) != 0) && a > 0x99)
+                {
                     adjust |= 0x60;
                     self.registers.set_c_flag(true);
                 }
-                
+
                 if (self.registers.f & 0x40) != 0 {
                     a = a.wrapping_sub(adjust);
                 } else {
                     a = a.wrapping_add(adjust);
                 }
-                
+
                 self.registers.set_z_flag(a == 0);
                 self.registers.set_h_flag(false);
                 self.registers.a = a;
@@ -1134,11 +1159,12 @@ impl CPU {
                 // ADD HL, HL (HL加上自身)
                 let hl = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
                 let result = hl.wrapping_add(hl);
-                
+
                 self.registers.set_n_flag(false);
-                self.registers.set_h_flag((hl & 0x0FFF) + (hl & 0x0FFF) > 0x0FFF);
+                self.registers
+                    .set_h_flag((hl & 0x0FFF) + (hl & 0x0FFF) > 0x0FFF);
                 self.registers.set_c_flag(result < hl);
-                
+
                 self.registers.h = (result >> 8) as u8;
                 self.registers.l = (result & 0xFF) as u8;
             }
@@ -1149,12 +1175,14 @@ impl CPU {
                 let offset = self.fetch() as i8;
                 let sp = self.registers.sp;
                 let result = (sp as i32 + offset as i32) as u16;
-                
+
                 self.registers.set_z_flag(false);
                 self.registers.set_n_flag(false);
-                self.registers.set_h_flag((sp & 0x0F) + ((offset as u16) & 0x0F) > 0x0F);
-                self.registers.set_c_flag((sp & 0xFF) + ((offset as u16) & 0xFF) > 0xFF);
-                
+                self.registers
+                    .set_h_flag((sp & 0x0F) + ((offset as u16) & 0x0F) > 0x0F);
+                self.registers
+                    .set_c_flag((sp & 0xFF) + ((offset as u16) & 0xFF) > 0xFF);
+
                 self.registers.h = (result >> 8) as u8;
                 self.registers.l = (result & 0xFF) as u8;
             }
@@ -1169,24 +1197,24 @@ impl CPU {
                 // RRCA (右旋轉累加器)
                 let a = self.registers.a;
                 let result = (a >> 1) | ((a & 0x01) << 7);
-                
+
                 self.registers.set_z_flag(false);
                 self.registers.set_n_flag(false);
                 self.registers.set_h_flag(false);
                 self.registers.set_c_flag((a & 0x01) != 0);
-                
+
                 self.registers.a = result;
             }
             0x0F => {
                 // RRCA (右旋轉累加器)
                 let a = self.registers.a;
                 let result = (a >> 1) | ((a & 0x01) << 7);
-                
+
                 self.registers.set_z_flag(false);
                 self.registers.set_n_flag(false);
                 self.registers.set_h_flag(false);
                 self.registers.set_c_flag((a & 0x01) != 0);
-                
+
                 self.registers.a = result;
             }
 
@@ -1195,12 +1223,12 @@ impl CPU {
                 // RLCA (左旋轉累加器)
                 let a = self.registers.a;
                 let result = (a << 1) | (a >> 7);
-                
+
                 self.registers.set_z_flag(false);
                 self.registers.set_n_flag(false);
                 self.registers.set_h_flag(false);
                 self.registers.set_c_flag((a & 0x80) != 0);
-                
+
                 self.registers.a = result;
             }
             0x08 => {
@@ -1209,7 +1237,8 @@ impl CPU {
                 let hi = self.fetch() as u16;
                 let addr = (hi << 8) | lo;
                 self.mmu.write_byte(addr, (self.registers.sp & 0xFF) as u8);
-                self.mmu.write_byte(addr + 1, (self.registers.sp >> 8) as u8);
+                self.mmu
+                    .write_byte(addr + 1, (self.registers.sp >> 8) as u8);
             }
             0x0A => {
                 // LD A, (BC)
@@ -1221,12 +1250,12 @@ impl CPU {
                 let a = self.registers.a;
                 let c = if (self.registers.f & 0x10) != 0 { 1 } else { 0 };
                 let result = (a << 1) | c;
-                
+
                 self.registers.set_z_flag(false);
                 self.registers.set_n_flag(false);
                 self.registers.set_h_flag(false);
                 self.registers.set_c_flag((a & 0x80) != 0);
-                
+
                 self.registers.a = result;
             }
             0x19 => {
@@ -1234,11 +1263,12 @@ impl CPU {
                 let hl = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
                 let de = ((self.registers.d as u16) << 8) | (self.registers.e as u16);
                 let result = hl.wrapping_add(de);
-                
+
                 self.registers.set_n_flag(false);
-                self.registers.set_h_flag((hl & 0x0FFF) + (de & 0x0FFF) > 0x0FFF);
+                self.registers
+                    .set_h_flag((hl & 0x0FFF) + (de & 0x0FFF) > 0x0FFF);
                 self.registers.set_c_flag(result < hl);
-                
+
                 self.registers.h = (result >> 8) as u8;
                 self.registers.l = (result & 0xFF) as u8;
             }
@@ -1250,14 +1280,18 @@ impl CPU {
             0x1F => {
                 // RRA (右旋轉累加器通過進位)
                 let a = self.registers.a;
-                let c = if (self.registers.f & 0x10) != 0 { 0x80 } else { 0 };
+                let c = if (self.registers.f & 0x10) != 0 {
+                    0x80
+                } else {
+                    0
+                };
                 let result = (a >> 1) | c;
-                
+
                 self.registers.set_z_flag(false);
                 self.registers.set_n_flag(false);
                 self.registers.set_h_flag(false);
                 self.registers.set_c_flag((a & 0x01) != 0);
-                
+
                 self.registers.a = result;
             }
             0x2F => {
@@ -1325,6 +1359,15 @@ impl CPU {
                     self.registers.pc = (hi << 8) | lo;
                 }
             }
+            0xD9 => {
+                // RETI (中斷返回)
+                let sp = self.registers.sp;
+                let lo = self.mmu.read_byte(sp) as u16;
+                let hi = self.mmu.read_byte(sp + 1) as u16;
+                self.registers.sp = self.registers.sp.wrapping_add(2);
+                self.registers.pc = (hi << 8) | lo;
+                self.ime = true; // 啟用中斷
+            }
 
             // 條件跳轉指令
             0xC2 => {
@@ -1358,10 +1401,12 @@ impl CPU {
                 if !z_flag {
                     // 將當前PC推入堆疊
                     self.registers.sp = self.registers.sp.wrapping_sub(1);
-                    self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                    self.mmu
+                        .write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
                     self.registers.sp = self.registers.sp.wrapping_sub(1);
-                    self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
-                    
+                    self.mmu
+                        .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+
                     // 跳轉到目標地址
                     self.registers.pc = addr;
                 }
@@ -1375,10 +1420,12 @@ impl CPU {
                 if z_flag {
                     // 將當前PC推入堆疊
                     self.registers.sp = self.registers.sp.wrapping_sub(1);
-                    self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                    self.mmu
+                        .write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
                     self.registers.sp = self.registers.sp.wrapping_sub(1);
-                    self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
-                    
+                    self.mmu
+                        .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+
                     // 跳轉到目標地址
                     self.registers.pc = addr;
                 }
@@ -1392,10 +1439,12 @@ impl CPU {
                 if !c_flag {
                     // 將當前PC推入堆疊
                     self.registers.sp = self.registers.sp.wrapping_sub(1);
-                    self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                    self.mmu
+                        .write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
                     self.registers.sp = self.registers.sp.wrapping_sub(1);
-                    self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
-                    
+                    self.mmu
+                        .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+
                     // 跳轉到目標地址
                     self.registers.pc = addr;
                 }
@@ -1409,10 +1458,12 @@ impl CPU {
                 if c_flag {
                     // 將當前PC推入堆疊
                     self.registers.sp = self.registers.sp.wrapping_sub(1);
-                    self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                    self.mmu
+                        .write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
                     self.registers.sp = self.registers.sp.wrapping_sub(1);
-                    self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
-                    
+                    self.mmu
+                        .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+
                     // 跳轉到目標地址
                     self.registers.pc = addr;
                 }
@@ -1516,49 +1567,61 @@ impl CPU {
             0xC7 => {
                 // RST 00H (重啟到地址0x00)
                 self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
                 self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
                 self.registers.pc = 0x00;
             }
             0xD7 => {
                 // RST 10H (重啟到地址0x10)
                 self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
                 self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
                 self.registers.pc = 0x10;
             }
             0xDF => {
                 // RST 18H (重啟到地址0x18)
                 self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
                 self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
                 self.registers.pc = 0x18;
             }
             0xE7 => {
                 // RST 20H (重啟到地址0x20)
                 self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
                 self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
                 self.registers.pc = 0x20;
             }
             0xEF => {
                 // RST 28H (重啟到地址0x28)
                 self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
                 self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
                 self.registers.pc = 0x28;
             }
             0xF7 => {
                 // RST 30H (重啟到地址0x30)
                 self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
                 self.registers.sp = self.registers.sp.wrapping_sub(1);
-                self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                self.mmu
+                    .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
                 self.registers.pc = 0x30;
             }
 
@@ -1586,9 +1649,11 @@ impl CPU {
                 let c_flag = (self.registers.f & 0x10) != 0;
                 if c_flag {
                     self.registers.sp = self.registers.sp.wrapping_sub(1);
-                    self.mmu.write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
+                    self.mmu
+                        .write_byte(self.registers.sp, (self.registers.pc >> 8) as u8);
                     self.registers.sp = self.registers.sp.wrapping_sub(1);
-                    self.mmu.write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
+                    self.mmu
+                        .write_byte(self.registers.sp, (self.registers.pc & 0xFF) as u8);
                     self.registers.pc = addr;
                 }
             }

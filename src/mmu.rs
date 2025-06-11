@@ -118,6 +118,7 @@ pub struct MMU {
     pub rom_read_count: usize,   // 計數器
     pub vram_write_count: usize, // 計數器
     pub debug_mode: bool,        // 調試模式
+    pub eram: Vec<u8>,           // 添加到MMU結構
 }
 
 impl MMU {
@@ -157,10 +158,9 @@ impl MMU {
             rom_read_count: 0,
             vram_write_count: 0,
             debug_mode: false,
-        };
-
-        // 初始化LCD控制暫存器和其他PPU暫存器的預設值
-        // 模擬Game Boy啟動後的狀態
+            eram: vec![0; 0x8000], // 32KB外部RAM
+        }; // 初始化LCD控制暫存器和其他PPU暫存器的預設值
+           // 模擬Game Boy啟動後的狀態
         mmu.memory[0xFF40] = 0x91; // LCDC: LCD啟用, BG啟用, BG & Window瓦片數據=$8000-$8FFF, BG瓦片映射=$9800-$9BFF
         mmu.memory[0xFF41] = 0x85; // STAT: LYC=LY中斷啟用, 模式2 OAM中斷啟用
         mmu.memory[0xFF42] = 0x00; // SCY: 滾動Y
@@ -170,24 +170,66 @@ impl MMU {
         mmu.memory[0xFF46] = 0x00; // DMA: DMA傳輸
         mmu.memory[0xFF47] = 0xFC; // BGP: BG調色盤
         mmu.memory[0xFF48] = 0xFF; // OBP0: OBJ調色盤0
-        mmu.memory[0xFF49] = 0xFF; // OBP1: OBJ調色盤1
+        mmu.memory[0xFF49] = 0xFF; // OBJ1: OBJ調色盤1
         mmu.memory[0xFF4A] = 0x00; // WY: Window Y位置
         mmu.memory[0xFF4B] = 0x00; // WX: Window X位置
-                                   // 初始化VRAM為空白，不再注入測試數據
-                                   // ROM加載後，CPU執行將會正確寫入VRAM
+
+        // 初始化中斷寄存器
+        mmu.if_reg = 0x00; // 中斷標誌寄存器 - 初始時無中斷
+        mmu.ie_reg = 0x01; // 中斷啟用寄存器 - 只啟用 VBlank 中斷
+
+        // 初始化VRAM為空白，不再注入測試數據
+        // ROM加載後，CPU執行將會正確寫入VRAM
 
         mmu
     }
-
     /// 創建一個功能性的測試 ROM，會寫入 VRAM 數據以驗證顯示
     fn create_fallback_rom() -> Vec<u8> {
         let mut fallback = vec![0; 0x8000];
 
         println!("🎮 正在創建 Game Boy 測試模式 ROM...");
 
-        // ROM header area (完全按照 Fix_blank_screen.md)
+        // ===== 中斷向量表 (0x0000-0x00FF) =====
+        // RST 00H (0x0000): 簡單返回
+        fallback[0x0000] = 0xC9; // RET
+
+        // RST 08H (0x0008): 簡單返回
+        fallback[0x0008] = 0xC9; // RET
+
+        // RST 10H (0x0010): 簡單返回
+        fallback[0x0010] = 0xC9; // RET
+
+        // RST 18H (0x0018): 簡單返回
+        fallback[0x0018] = 0xC9; // RET
+
+        // RST 20H (0x0020): 簡單返回
+        fallback[0x0020] = 0xC9; // RET
+
+        // RST 28H (0x0028): 簡單返回
+        fallback[0x0028] = 0xC9; // RET
+
+        // RST 30H (0x0030): 簡單返回
+        fallback[0x0030] = 0xC9; // RET        // RST 38H (0x0038): 軟體中斷處理 - 應該跳轉到實際處理程序或直接返回
+        fallback[0x0038] = 0xC9; // RET (普通返回，不是中斷返回)
+
+        // VBlank 中斷向量 (0x0040)
+        fallback[0x0040] = 0xD9; // RETI (從中斷返回並啟用中斷)
+
+        // LCD STAT 中斷向量 (0x0048)
+        fallback[0x0048] = 0xD9; // RETI (從中斷返回並啟用中斷)
+
+        // Timer 中斷向量 (0x0050)
+        fallback[0x0050] = 0xD9; // RETI (從中斷返回並啟用中斷)
+
+        // Serial 中斷向量 (0x0058)
+        fallback[0x0058] = 0xD9; // RETI (從中斷返回並啟用中斷)
+
+        // Joypad 中斷向量 (0x0060)
+        fallback[0x0060] = 0xD9; // RETI (從中斷返回並啟用中斷)        // ===== 主程序入口點 (0x0100) =====
+                                 // ROM header area (完全按照 Fix_blank_screen.md)
         fallback[0x100] = 0x00; // Entry point: NOP
-        fallback[0x101] = 0x3E; // LD A, value        fallback[0x102] = 0x91; // value = 0x91 (LCDC value to enable LCD and BG)
+        fallback[0x101] = 0x3E; // LD A, value
+        fallback[0x102] = 0x91; // value = 0x91 (LCDC value to enable LCD and BG)
 
         // Set LCDC register to enable LCD and background
         fallback[0x103] = 0xE0; // LDH (0xFF00+n), A
@@ -199,27 +241,42 @@ impl MMU {
         fallback[0x107] = 0xE0; // LDH (0xFF00+n), A
         fallback[0x108] = 0x47; // n = 0x47 (0xFF47 is BGP)
 
+        // 啟用 VBlank 中斷
+        fallback[0x109] = 0x3E; // LD A, value
+        fallback[0x10A] = 0x01; // value = 0x01 (VBlank interrupt enable)
+        fallback[0x10B] = 0xE0; // LDH (0xFF00+n), A
+        fallback[0x10C] = 0xFF; // n = 0xFF (0xFFFF is IE register)
+
+        // 啟用中斷主開關
+        fallback[0x10D] = 0xFB; // EI (Enable Interrupts)
+
         // Write a simple tile pattern to VRAM
         // First set HL to point to tile data area
-        fallback[0x109] = 0x21; // LD HL, nn
-        fallback[0x10A] = 0x00; // low byte of 0x8000
-        fallback[0x10B] = 0x80; // high byte of 0x8000
+        fallback[0x10E] = 0x21; // LD HL, nn
+        fallback[0x10F] = 0x00; // low byte of 0x8000
+        fallback[0x110] = 0x80; // high byte of 0x8000
 
-        // Write first tile (checkerboard pattern)
+        // Write first tile (solid square pattern instead of alternating lines)
         // Tile data takes 16 bytes (2 bytes per row, 8 rows)
-        fallback[0x10C] = 0x3E; // LD A, value
-        fallback[0x10D] = 0x55; // value = 0x55 (alternating bits)
+        fallback[0x111] = 0x3E; // LD A, value
+        fallback[0x10D] = 0x7E; // value = 0x7E (border pattern: 01111110)
         fallback[0x10E] = 0x22; // LD (HL+), A
         fallback[0x10F] = 0x3E; // LD A, value
-        fallback[0x110] = 0xAA; // value = 0xAA (opposite alternating bits)
+        fallback[0x110] = 0x00; // value = 0x00 (high byte for color)
         fallback[0x111] = 0x22; // LD (HL+), A
 
-        // Repeat for remaining 7 rows (simplified in this example)
+        // Second row - different pattern
         fallback[0x112] = 0x3E; // LD A, value
-        fallback[0x113] = 0xFF; // value = 0xFF (solid row)
+        fallback[0x113] = 0x42; // value = 0x42 (pattern: 01000010)
 
         for i in 0..14 {
             fallback[0x114 + i * 2] = 0x22; // LD (HL+), A
+                                            // Alternate between different patterns instead of all 0xFF
+            if i % 4 < 2 {
+                fallback[0x113 + i * 2] = 0x42; // 01000010
+            } else {
+                fallback[0x113 + i * 2] = 0x18; // 00011000
+            }
         }
 
         // Write tile ID 1 to background map at position (0,0)
@@ -525,13 +582,28 @@ impl MMU {
             }
             0xFF00 => {
                 // Joypad register
-                let mut value = 0xCF; // 高4位總是1
+                let mut value = 0xCF; // 高4位固定為1，低4位為按鍵狀態
+
+                // 根據選擇的模式返回對應的按鍵狀態
                 if self.joypad.select_direction {
-                    value &= self.joypad.direction_keys;
+                    value = (value & 0xF0) | (self.joypad.direction_keys & 0x0F);
                 }
                 if self.joypad.select_action {
-                    value &= self.joypad.action_keys;
+                    value = (value & 0xF0) | (self.joypad.action_keys & 0x0F);
                 }
+
+                // 設置選擇位
+                if !self.joypad.select_direction {
+                    value |= 0x10; // bit 4 = 1 表示方向鍵未選擇
+                } else {
+                    value &= !0x10; // bit 4 = 0 表示方向鍵已選擇
+                }
+                if !self.joypad.select_action {
+                    value |= 0x20; // bit 5 = 1 表示動作鍵未選擇
+                } else {
+                    value &= !0x20; // bit 5 = 0 表示動作鍵已選擇
+                }
+
                 value
             }
             0xFF01..=0xFF0E => self.memory[addr as usize],
@@ -562,97 +634,108 @@ impl MMU {
 
     pub fn write_byte(&mut self, addr: u16, value: u8) {
         match addr {
-            0x0000..=0x7FFF => match self.mbc.mbc_type {
-                MBCType::None => {
-                    // 不可寫入ROM區域，忽略
-                }
-                MBCType::MBC1 => match addr {
-                    // RAM啟用/禁用 (0x0000-0x1FFF)
-                    0x0000..=0x1FFF => {
-                        self.mbc.ram_enabled = (value & 0x0F) == 0x0A;
-                    }
-                    // ROM Bank選擇 (0x2000-0x3FFF)
-                    0x2000..=0x3FFF => {
-                        let mut bank = value & 0x1F;
-                        if bank == 0 {
-                            bank = 1;
-                        }
-                        self.mbc.rom_bank = (self.mbc.rom_bank & 0x60) | bank;
-                    }
-                    // RAM Bank選擇 (0x4000-0x5FFF)
-                    0x4000..=0x5FFF => {
-                        if self.mbc.mbc1_mode == 0 {
-                            self.mbc.rom_bank = (self.mbc.rom_bank & 0x1F) | ((value & 0x03) << 5);
-                        } else {
-                            self.mbc.ram_bank = value & 0x03;
-                        }
-                    }
-                    // ROM/RAM Mode選擇 (0x6000-0x7FFF)
-                    0x6000..=0x7FFF => {
-                        self.mbc.mbc1_mode = value & 0x01;
-                    }
-                    _ => {}
-                },
-                // 對於其他MBC類型，這裡略過完整實現
-                _ => {}
-            },
+            0x0000..=0x7FFF => {
+                // ROM區域 - 實現MBC控制器寫入
+                self.handle_mbc_write(addr, value);
+            }
             0x8000..=0x9FFF => {
-                // VRAM
+                // VRAM (顯存)
                 let mut vram = self.vram.borrow_mut();
                 vram[(addr - 0x8000) as usize] = value;
                 self.vram_write_count += 1;
             }
             0xA000..=0xBFFF => {
-                // External RAM (currently not implemented)
+                // 外部RAM (卡帶RAM)
+                if self.mbc.ram_enabled {
+                    // 這裡需要實現外部RAM存取
+                    // 因為代碼中沒有顯示eram的定義，暫時註釋此部分
+                    println!("寫入外部RAM: 地址 0x{:04X}, 值 0x{:02X}", addr, value);
+                    // let bank = self.mbc.ram_bank;
+                    // let ram_addr = (addr - 0xA000) as usize + (bank as usize * 0x2000);
+                    // if ram_addr < self.eram.len() {
+                    //     self.eram[ram_addr] = value;
+                    // }
+                }
             }
             0xC000..=0xFDFF => {
-                // Internal RAM + Echo
-                let addr = if addr >= 0xE000 {
-                    // Echo of internal RAM
-                    addr - 0x2000
+                // 工作RAM及其回顯 (0xE000-0xFDFF是0xC000-0xDDFF的回顯)
+                let ram_addr = if addr >= 0xE000 {
+                    // 轉換回顯地址到實際RAM地址
+                    (addr - 0xE000) as usize
                 } else {
-                    addr
+                    (addr - 0xC000) as usize
                 };
-                self.memory[addr as usize] = value;
+
+                // 確保不超出記憶體範圍
+                if ram_addr < 0x2000 {
+                    self.memory[0xC000 + ram_addr] = value;
+                }
             }
             0xFE00..=0xFE9F => {
-                // OAM
+                // OAM (精靈屬性表)
                 let mut oam = self.oam.borrow_mut();
                 oam[(addr - 0xFE00) as usize] = value;
             }
-            0xFF00 => {
-                // Joypad register
-                self.joypad.select_direction = (value & 0x10) == 0;
-                self.joypad.select_action = (value & 0x20) == 0;
+            0xFEA0..=0xFEFF => {
+                // Unusable memory area, writes are ignored
+                // (Do nothing)
             }
-            0xFF01..=0xFF0E => {
-                self.memory[addr as usize] = value;
-            }
-            0xFF0F => {
-                // Interrupt Flag
-                self.if_reg = value;
-            }
-            0xFF10..=0xFF3F => {
-                // Audio registers
-                if addr >= 0xFF10 && addr <= 0xFF3F {
-                    self.apu.borrow_mut().write_reg(addr, value);
+            0xFF00..=0xFF7F => {
+                // I/O 寄存器
+                match addr {
+                    0xFF00 => {
+                        // JOYPAD寄存器
+                        // 只可寫入高4位（低4位為按鍵狀態，只讀）
+                        let select_bits = value & 0x30; // 只保留bit 4-5
+                        self.joypad.select_action = (select_bits & 0x20) == 0;
+                        self.joypad.select_direction = (select_bits & 0x10) == 0;
+                        self.memory[addr as usize] =
+                            (self.memory[addr as usize] & 0xCF) | select_bits;
+                    }
+                    0xFF01..=0xFF03 => {
+                        // 串口和計時器
+                        self.memory[addr as usize] = value;
+                    }
+                    0xFF04 => {
+                        // DIV寄存器（寫入時重置為0）
+                        self.memory[0xFF04] = 0;
+                    }
+                    0xFF05..=0xFF07 => {
+                        // 計時器控制
+                        self.memory[addr as usize] = value;
+                        self.timer.write_register(addr, value);
+                    }
+                    0xFF0F => {
+                        // 中斷標誌寄存器(IF)
+                        self.if_reg = value;
+                    }
+                    0xFF10..=0xFF3F => {
+                        // APU寄存器
+                        self.apu.borrow_mut().write_reg(addr, value);
+                        self.memory[addr as usize] = value;
+                    }
+                    0xFF40..=0xFF4B => {
+                        // PPU控制寄存器
+                        self.memory[addr as usize] = value;
+                    }
+                    0xFF46 => {
+                        // DMA傳輸
+                        self.memory[0xFF46] = value;
+                        self.dma_transfer(value);
+                    }
+                    _ => {
+                        // 其他I/O寄存器
+                        self.memory[addr as usize] = value;
+                    }
                 }
-                self.memory[addr as usize] = value;
-            }
-            0xFF40..=0xFF7F => {
-                // IO Registers
-                self.memory[addr as usize] = value;
             }
             0xFF80..=0xFFFE => {
-                // High RAM
+                // 高速RAM (HRAM)
                 self.memory[addr as usize] = value;
             }
             0xFFFF => {
-                // Interrupt Enable
+                // IE 寄存器
                 self.ie_reg = value;
-            }
-            _ => {
-                // Unmapped memory region - ignore writes
             }
         }
     }
@@ -848,13 +931,74 @@ impl MMU {
         if self.rom.is_empty() || self.rom_state != RomState::Valid {
             return None;
         }
-        
+
         // 計算簡單的校驗和
         let mut checksum: u32 = 0;
         for (i, &byte) in self.rom.iter().enumerate().take(0x8000) {
             checksum = checksum.wrapping_add(byte as u32 * (i as u32 + 1));
         }
-        
+
         Some(format!("{:08X}", checksum))
+    }
+
+    // 添加DMA傳輸方法
+    fn dma_transfer(&mut self, value: u8) {
+        // DMA源地址 = value * 0x100
+        let source = (value as u16) << 8;
+
+        // 將源地址的160字節複製到OAM (0xFE00-0xFE9F)
+        for i in 0..160 {
+            let data = self.read_byte(source + i);
+            let mut oam = self.oam.borrow_mut();
+            oam[i as usize] = data;
+        }
+
+        println!("執行DMA傳輸: 源地址 0x{:04X}", source);
+    }
+
+    // 添加MBC控制器寫入處理
+    fn handle_mbc_write(&mut self, addr: u16, value: u8) {
+        match self.mbc.mbc_type {
+            MBCType::None => {
+                // 無MBC控制器，寫入無效
+                return;
+            }
+            MBCType::MBC1 => {
+                match addr {
+                    0x0000..=0x1FFF => {
+                        // RAM啟用/禁用 (0x0A啟用，其他禁用)
+                        self.mbc.ram_enabled = (value & 0x0F) == 0x0A;
+                    }
+                    0x2000..=0x3FFF => {
+                        // ROM庫號低5位
+                        // 庫號不能為0，如果寫入0，實際為1
+                        let mut bank = value & 0x1F;
+                        if bank == 0 {
+                            bank = 1;
+                        }
+
+                        // 保留高位，更新低位
+                        self.mbc.rom_bank = (self.mbc.rom_bank & 0x60) | bank;
+                    }
+                    0x4000..=0x5FFF => {
+                        // RAM庫號或ROM庫號高位
+                        if self.mbc.mbc1_mode == 0 {
+                            // ROM模式: 設置ROM庫號高位
+                            self.mbc.rom_bank = (self.mbc.rom_bank & 0x1F) | ((value & 0x03) << 5);
+                        } else {
+                            // RAM模式: 設置RAM庫號
+                            self.mbc.ram_bank = value & 0x03;
+                        }
+                    }
+                    0x6000..=0x7FFF => {
+                        // 設置MBC1模式
+                        self.mbc.mbc1_mode = value & 0x01;
+                    }
+                    _ => {}
+                }
+            }
+            // 其他MBC類型...
+            _ => println!("未實現的MBC類型寫入: {:?}", self.mbc.mbc_type),
+        }
     }
 }
