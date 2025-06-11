@@ -54,6 +54,176 @@ pub struct CPU {
 }
 
 impl CPU {
+    // Implements ADD A, value (8-bit) and sets flags accordingly
+    fn alu_add(&mut self, value: u8) {
+        let a = self.registers.a;
+        let result = a.wrapping_add(value);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(((a & 0xF) + (value & 0xF)) > 0xF);
+        self.registers.set_c_flag((a as u16 + value as u16) > 0xFF);
+        self.registers.a = result;
+    }
+
+    // Implements ADC A, value (8-bit) and sets flags accordingly
+    fn alu_adc(&mut self, value: u8) {
+        let a = self.registers.a;
+        let carry = if (self.registers.f & 0x10) != 0 { 1 } else { 0 };
+        let result = a.wrapping_add(value).wrapping_add(carry);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(((a & 0xF) + (value & 0xF) + carry) > 0xF);
+        self.registers.set_c_flag((a as u16 + value as u16 + carry as u16) > 0xFF);
+        self.registers.a = result;
+    }
+
+    // Implements SUB A, value (8-bit) and sets flags accordingly
+    fn alu_sub(&mut self, value: u8) {
+        let a = self.registers.a;
+        let result = a.wrapping_sub(value);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(true);
+        self.registers.set_h_flag((a & 0xF) < (value & 0xF));
+        self.registers.set_c_flag(a < value);
+        self.registers.a = result;
+    }
+
+    // Implements SBC A, value (8-bit) and sets flags accordingly
+    fn alu_sbc(&mut self, value: u8) {
+        let a = self.registers.a;
+        let carry = if (self.registers.f & 0x10) != 0 { 1 } else { 0 };
+        let result = a.wrapping_sub(value).wrapping_sub(carry);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(true);
+        self.registers.set_h_flag((a & 0xF) < ((value & 0xF) + carry));
+        self.registers.set_c_flag((a as u16) < (value as u16 + carry as u16));
+        self.registers.a = result;
+    }
+
+    // Implements AND A, value (8-bit) and sets flags accordingly
+    fn alu_and(&mut self, value: u8) {
+        let result = self.registers.a & value;
+        self.registers.a = result;
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(true);
+        self.registers.set_c_flag(false);
+    }
+
+    // Implements OR A, value (8-bit) and sets flags accordingly
+    fn alu_or(&mut self, value: u8) {
+        let result = self.registers.a | value;
+        self.registers.a = result;
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag(false);
+    }
+
+    // Implements XOR A, value (8-bit) and sets flags accordingly
+    fn alu_xor(&mut self, value: u8) {
+        let result = self.registers.a ^ value;
+        self.registers.a = result;
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag(false);
+    }
+
+    // Implements CP A, value (8-bit) and sets flags accordingly
+    fn alu_cp(&mut self, value: u8) {
+        let a = self.registers.a;
+        let result = a.wrapping_sub(value);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(true);
+        self.registers.set_h_flag((a & 0xF) < (value & 0xF));
+        self.registers.set_c_flag(a < value);
+    }
+
+    // RLC: Rotate Left Circular
+    fn rlc(&mut self, value: u8) -> u8 {
+        let result = (value << 1) | (value >> 7);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag((value & 0x80) != 0);
+        result
+    }
+
+    // RRC: Rotate Right Circular
+    fn rrc(&mut self, value: u8) -> u8 {
+        let result = (value >> 1) | ((value & 0x01) << 7);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag((value & 0x01) != 0);
+        result
+    }
+
+    // RL: Rotate Left through Carry
+    fn rl(&mut self, value: u8) -> u8 {
+        let c = if (self.registers.f & 0x10) != 0 { 1 } else { 0 };
+        let result = (value << 1) | c;
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag((value & 0x80) != 0);
+        result
+    }
+
+    // RR: Rotate Right through Carry
+    fn rr(&mut self, value: u8) -> u8 {
+        let c = if (self.registers.f & 0x10) != 0 { 0x80 } else { 0 };
+        let result = (value >> 1) | c;
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag((value & 0x01) != 0);
+        result
+    }
+
+    // SLA: Shift Left Arithmetic
+    fn sla(&mut self, value: u8) -> u8 {
+        let result = value << 1;
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag((value & 0x80) != 0);
+        result
+    }
+
+    // SRA: Shift Right Arithmetic
+    fn sra(&mut self, value: u8) -> u8 {
+        let result = (value >> 1) | (value & 0x80);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag((value & 0x01) != 0);
+        result
+    }
+
+    // SRL: Shift Right Logical
+    fn srl(&mut self, value: u8) -> u8 {
+        let result = value >> 1;
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag((value & 0x01) != 0);
+        result
+    }
+
+    // SWAP: Swap nibbles
+    fn swap(&mut self, value: u8) -> u8 {
+        let result = (value >> 4) | (value << 4);
+        self.registers.set_z_flag(result == 0);
+        self.registers.set_n_flag(false);
+        self.registers.set_h_flag(false);
+        self.registers.set_c_flag(false);
+        result
+    }
+
+    // --- ALU 運算相關方法 ---
+
     pub fn new(mmu: MMU) -> Self {
         let mut registers = Registers::default();
         registers.pc = 0x0100; // Game Boy CPU 应该从 0x0100 开始执行
@@ -100,18 +270,10 @@ impl CPU {
         match opcode {
             // 移除重複分支：0x44、0x76、0x78~0x7F、0x20（保留 0x40~0x7F 區塊與靠近 0x18 的 0x20）
             0x00 => {} // NOP
-            0x3C => {
-                self.registers.a = self.registers.a.wrapping_add(1);
-            } // INC A
-            0x3D => {
-                self.registers.a = self.registers.a.wrapping_sub(1);
-            } // DEC A
-            0x04 => {
-                self.registers.b = self.registers.b.wrapping_add(1);
-            } // INC B
-            0x05 => {
-                self.registers.b = self.registers.b.wrapping_sub(1);
-            } // DEC B
+            0x3C => {self.registers.a = self.registers.a.wrapping_add(1);} // INC A
+            0x3D => { self.registers.a = self.registers.a.wrapping_sub(1);} // DEC A
+            0x04 => {self.registers.b = self.registers.b.wrapping_add(1);} // INC B
+            0x05 => {self.registers.b = self.registers.b.wrapping_sub(1);} // DEC B
             0x06 => {
                 let n = self.fetch();
                 self.registers.b = n;
@@ -438,7 +600,8 @@ impl CPU {
             } // ADD A,L
             0x86 => {
                 let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
-                self.alu_add(self.mmu.read_byte(addr));
+                let v = self.mmu.read_byte(addr);
+                self.alu_add(v);
             } // ADD A,(HL)
             0x87 => {
                 self.alu_add(self.registers.a);
@@ -463,7 +626,8 @@ impl CPU {
             } // ADC A,L
             0x8E => {
                 let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
-                self.alu_adc(self.mmu.read_byte(addr));
+                let v = self.mmu.read_byte(addr);
+                self.alu_adc(v);
             } // ADC A,(HL)
             0x8F => {
                 self.alu_adc(self.registers.a);
@@ -488,7 +652,8 @@ impl CPU {
             } // SUB L
             0x96 => {
                 let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
-                self.alu_sub(self.mmu.read_byte(addr));
+                let v = self.mmu.read_byte(addr);
+                self.alu_sub(v);
             } // SUB (HL)
             0x97 => {
                 self.alu_sub(self.registers.a);
@@ -513,7 +678,8 @@ impl CPU {
             } // SBC A,L
             0x9E => {
                 let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
-                self.alu_sbc(self.mmu.read_byte(addr));
+                let v = self.mmu.read_byte(addr);
+                self.alu_sbc(v);
             } // SBC A,(HL)
             0x9F => {
                 self.alu_sbc(self.registers.a);
@@ -538,7 +704,8 @@ impl CPU {
             } // AND L
             0xA6 => {
                 let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
-                self.alu_and(self.mmu.read_byte(addr));
+                let v = self.mmu.read_byte(addr);
+                self.alu_and(v);
             } // AND (HL)
             0xA7 => {
                 self.alu_and(self.registers.a);
@@ -563,7 +730,8 @@ impl CPU {
             } // XOR L
             0xAE => {
                 let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
-                self.alu_xor(self.mmu.read_byte(addr));
+                let v = self.mmu.read_byte(addr);
+                self.alu_xor(v);
             } // XOR (HL)
             0xAF => {
                 self.alu_xor(self.registers.a);
@@ -588,7 +756,8 @@ impl CPU {
             } // OR L
             0xB6 => {
                 let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
-                self.alu_or(self.mmu.read_byte(addr));
+                let v = self.mmu.read_byte(addr);
+                self.alu_or(v);
             } // OR (HL)
             0xB7 => {
                 self.alu_or(self.registers.a);
@@ -613,7 +782,8 @@ impl CPU {
             } // CP L
             0xBE => {
                 let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
-                self.alu_cp(self.mmu.read_byte(addr));
+                let v = self.mmu.read_byte(addr);
+                self.alu_cp(v);
             } // CP (HL)
             0xBF => {
                 self.alu_cp(self.registers.a);
@@ -650,7 +820,7 @@ impl CPU {
                     0x07 => {
                         self.registers.a = self.rlc(self.registers.a);
                     }
-                    // RRC r
+                    // RRC: Rotate Right Circular
                     0x08 => {
                         self.registers.b = self.rrc(self.registers.b);
                     }
@@ -678,7 +848,7 @@ impl CPU {
                     0x0F => {
                         self.registers.a = self.rrc(self.registers.a);
                     }
-                    // RL r
+                    // RL: Rotate Left through Carry
                     0x10 => {
                         self.registers.b = self.rl(self.registers.b);
                     }
@@ -706,7 +876,7 @@ impl CPU {
                     0x17 => {
                         self.registers.a = self.rl(self.registers.a);
                     }
-                    // RR r
+                    // RR: Rotate Right through Carry
                     0x18 => {
                         self.registers.b = self.rr(self.registers.b);
                     }
@@ -734,7 +904,7 @@ impl CPU {
                     0x1F => {
                         self.registers.a = self.rr(self.registers.a);
                     }
-                    // SLA r
+                    // SLA: Shift Left Arithmetic
                     0x20 => {
                         self.registers.b = self.sla(self.registers.b);
                     }
@@ -762,7 +932,7 @@ impl CPU {
                     0x27 => {
                         self.registers.a = self.sla(self.registers.a);
                     }
-                    // SRA r
+                    // SRA: Shift Right Arithmetic
                     0x28 => {
                         self.registers.b = self.sra(self.registers.b);
                     }
@@ -790,7 +960,7 @@ impl CPU {
                     0x2F => {
                         self.registers.a = self.sra(self.registers.a);
                     }
-                    // SWAP r
+                    // SWAP: Swap nibbles
                     0x30 => {
                         self.registers.b = self.swap(self.registers.b);
                     }
@@ -818,7 +988,7 @@ impl CPU {
                     0x37 => {
                         self.registers.a = self.swap(self.registers.a);
                     }
-                    // SRL r
+                    // SRL: Shift Right Logical
                     0x38 => {
                         self.registers.b = self.srl(self.registers.b);
                     }
@@ -859,8 +1029,7 @@ impl CPU {
                             4 => self.registers.h,
                             5 => self.registers.l,
                             6 => {
-                                let addr =
-                                    ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
                                 self.mmu.read_byte(addr)
                             }
                             7 => self.registers.a,
@@ -883,8 +1052,7 @@ impl CPU {
                             4 => self.registers.h &= !(1 << bit),
                             5 => self.registers.l &= !(1 << bit),
                             6 => {
-                                let addr =
-                                    ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
                                 let v = self.mmu.read_byte(addr) & !(1 << bit);
                                 self.mmu.write_byte(addr, v);
                             }
@@ -904,8 +1072,7 @@ impl CPU {
                             4 => self.registers.h |= 1 << bit,
                             5 => self.registers.l |= 1 << bit,
                             6 => {
-                                let addr =
-                                    ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
                                 let v = self.mmu.read_byte(addr) | (1 << bit);
                                 self.mmu.write_byte(addr, v);
                             }
@@ -913,159 +1080,14 @@ impl CPU {
                             _ => {}
                         }
                     }
-                    _ => { /* 不用的 CB 指令可註解或保留 */ }
+                    _ => {
+                        println!("未處理的 CB 指令: 0x{:02X}", cb_opcode);
+                    }
                 }
             }
             _ => {
                 println!("未處理的指令: 0x{:02X}", opcode);
             }
-        } // match 結尾
-    } // decode_and_execute 結尾
-
-    // ALU 輔助方法
-    fn alu_add(&mut self, v: u8) {
-        let (result, carry) = self.registers.a.overflowing_add(v);
-        self.registers.set_z_flag(result == 0);
-        self.registers.set_n_flag(false);
-        self.registers
-            .set_h_flag(((self.registers.a & 0xF) + (v & 0xF)) > 0xF);
-        self.registers.set_c_flag(carry);
-        self.registers.a = result;
-    }
-    fn alu_adc(&mut self, v: u8) {
-        let c = if (self.registers.f & 0x10) != 0 { 1 } else { 0 };
-        let (sum1, carry1) = self.registers.a.overflowing_add(v);
-        let (result, carry2) = sum1.overflowing_add(c);
-        self.registers.set_z_flag(result == 0);
-        self.registers.set_n_flag(false);
-        self.registers
-            .set_h_flag(((self.registers.a & 0xF) + (v & 0xF) + c) > 0xF);
-        self.registers.set_c_flag(carry1 || carry2);
-        self.registers.a = result;
-    }
-    fn alu_sub(&mut self, v: u8) {
-        let (result, borrow) = self.registers.a.overflowing_sub(v);
-        self.registers.set_z_flag(result == 0);
-        self.registers.set_n_flag(true);
-        self.registers
-            .set_h_flag((self.registers.a & 0xF) < (v & 0xF));
-        self.registers.set_c_flag(borrow);
-        self.registers.a = result;
-    }
-    fn alu_sbc(&mut self, v: u8) {
-        let c = if (self.registers.f & 0x10) != 0 { 1 } else { 0 };
-        let (sub1, borrow1) = self.registers.a.overflowing_sub(v);
-        let (result, borrow2) = sub1.overflowing_sub(c);
-        self.registers.set_z_flag(result == 0);
-        self.registers.set_n_flag(true);
-        self.registers
-            .set_h_flag((self.registers.a & 0xF) < ((v & 0xF) + c));
-        self.registers.set_c_flag(borrow1 || borrow2);
-        self.registers.a = result;
-    }
-    fn alu_and(&mut self, v: u8) {
-        self.registers.a &= v;
-        self.registers.set_z_flag(self.registers.a == 0);
-        self.registers.set_n_flag(false);
-        self.registers.set_h_flag(true);
-        self.registers.set_c_flag(false);
-    }
-    fn alu_or(&mut self, v: u8) {
-        self.registers.a |= v;
-        self.registers.set_z_flag(self.registers.a == 0);
-        self.registers.set_n_flag(false);
-        self.registers.set_h_flag(false);
-        self.registers.set_c_flag(false);
-    }
-    fn alu_xor(&mut self, v: u8) {
-        self.registers.a ^= v;
-        self.registers.set_z_flag(self.registers.a == 0);
-        self.registers.set_n_flag(false);
-        self.registers.set_h_flag(false);
-        self.registers.set_c_flag(false);
-    }
-    fn alu_cp(&mut self, v: u8) {
-        let (result, borrow) = self.registers.a.overflowing_sub(v);
-        self.registers.set_z_flag(result == 0);
-        self.registers.set_n_flag(true);
-        self.registers
-            .set_h_flag((self.registers.a & 0xF) < (v & 0xF));
-        self.registers.set_c_flag(borrow);
-    }
-
-    // CB 前綴指令輔助方法
-    fn rlc(&mut self, v: u8) -> u8 {
-        let c = (v & 0x80) != 0;
-        let result = v.rotate_left(1);
-        self.registers.set_z_flag(result == 0);
-        self.registers.set_n_flag(false);
-        self.registers.set_h_flag(false);
-        self.registers.set_c_flag(c);
-        result
-    }
-    fn rrc(&mut self, v: u8) -> u8 {
-        let c = (v & 0x01) != 0;
-        let result = v.rotate_right(1);
-        self.registers.set_z_flag(result == 0);
-        self.registers.set_n_flag(false);
-        self.registers.set_h_flag(false);
-        self.registers.set_c_flag(c);
-        result
-    }
-    fn rl(&mut self, v: u8) -> u8 {
-        let c = (self.registers.f & 0x10) != 0;
-        let new_carry = (v & 0x80) != 0;
-        let result = (v << 1) | if c { 1 } else { 0 };
-        self.registers.set_z_flag(result == 0);
-        self.registers.set_n_flag(false);
-        self.registers.set_h_flag(false);
-        self.registers.set_c_flag(new_carry);
-        result
-    }
-    fn rr(&mut self, v: u8) -> u8 {
-        let c = (self.registers.f & 0x10) != 0;
-        let new_carry = (v & 0x01) != 0;
-        let result = (v >> 1) | if c { 0x80 } else { 0 };
-        self.registers.set_z_flag(result == 0);
-        self.registers.set_n_flag(false);
-        self.registers.set_h_flag(false);
-        self.registers.set_c_flag(new_carry);
-        result
-    }
-    fn sla(&mut self, v: u8) -> u8 {
-        let c = (v & 0x80) != 0;
-        let result = v << 1;
-        self.registers.set_z_flag(result == 0);
-        self.registers.set_n_flag(false);
-        self.registers.set_h_flag(false);
-        self.registers.set_c_flag(c);
-        result
-    }
-    fn sra(&mut self, v: u8) -> u8 {
-        let c = (v & 0x01) != 0;
-        let msb = v & 0x80;
-        let result = (v >> 1) | msb;
-        self.registers.set_z_flag(result == 0);
-        self.registers.set_n_flag(false);
-        self.registers.set_h_flag(false);
-        self.registers.set_c_flag(c);
-        result
-    }
-    fn swap(&mut self, v: u8) -> u8 {
-        let result = (v >> 4) | (v << 4);
-        self.registers.set_z_flag(result == 0);
-        self.registers.set_n_flag(false);
-        self.registers.set_h_flag(false);
-        self.registers.set_c_flag(false);
-        result
-    }
-    fn srl(&mut self, v: u8) -> u8 {
-        let c = (v & 0x01) != 0;
-        let result = v >> 1;
-        self.registers.set_z_flag(result == 0);
-        self.registers.set_n_flag(false);
-        self.registers.set_h_flag(false);
-        self.registers.set_c_flag(c);
-        result
+        }
     }
 }
