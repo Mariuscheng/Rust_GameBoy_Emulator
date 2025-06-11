@@ -366,6 +366,9 @@ impl CPU {
                 let n = self.fetch();
                 self.registers.b = n;
             } // LD B, n
+            0x0C => {
+                self.registers.c = self.registers.c.wrapping_add(1);
+            } // INC C
             0x0E => {
                 let n = self.fetch();
                 self.registers.c = n;
@@ -389,14 +392,7 @@ impl CPU {
             0x3E => {
                 let n = self.fetch();
                 self.registers.a = n;
-            } // LD A, n
-            0xAF => {
-                self.registers.a ^= self.registers.a;
-                self.registers.set_z_flag(self.registers.a == 0);
-                self.registers.set_n_flag(false);
-                self.registers.set_h_flag(false);
-                self.registers.set_c_flag(false);
-            }
+            } // LD A, n            // XOR A - 已經在後面的代碼區塊中實現了
             0xC3 => {
                 let lo = self.fetch() as u16;
                 let hi = self.fetch() as u16;
@@ -406,14 +402,7 @@ impl CPU {
                 let offset = self.fetch() as i8;
                 self.registers.pc = ((self.registers.pc as i32) + (offset as i32)) as u16;
             }
-            // 新增的指令實現
-            0xA7 => {
-                self.registers.a &= self.registers.a;
-                self.registers.set_z_flag(self.registers.a == 0);
-                self.registers.set_n_flag(false);
-                self.registers.set_h_flag(true);
-                self.registers.set_c_flag(false);
-            }
+            // 新增的指令實現            // 0xA7 (AND A) - 已經在後面的代碼區塊中實現
             0x20 => {
                 // JR NZ, n (如果 Z 標誌未設置則相對跳轉)
                 let offset = self.fetch() as i8;
@@ -468,6 +457,50 @@ impl CPU {
                     self.registers.pc = addr;
                 }
             }
+            // 新增指令: LD DE,d16
+            0x11 => {
+                let lo = self.fetch() as u16;
+                let hi = self.fetch() as u16;
+                self.registers.e = lo as u8;
+                self.registers.d = hi as u8;
+            } // LD DE,d16
+            // 新增指令: LD A,(DE)
+            0x1A => {
+                let addr = ((self.registers.d as u16) << 8) | (self.registers.e as u16);
+                self.registers.a = self.mmu.read_byte(addr);
+            } // LD A,(DE)
+            // 新增指令: RLA
+            0x17 => {
+                let c = if (self.registers.f & 0x10) != 0 { 1 } else { 0 };
+                let carry = (self.registers.a & 0x80) != 0;
+                self.registers.a = (self.registers.a << 1) | c;
+                self.registers.set_z_flag(false);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag(false);
+                self.registers.set_c_flag(carry);
+            } // RLA
+            // 新增指令: AND d8
+            0xE6 => {
+                let n = self.fetch();
+                self.alu_and(n);
+            } // AND d8
+            // 新增指令: OR d8
+            0xF6 => {
+                let n = self.fetch();
+                self.alu_or(n);
+            } // OR d8
+            // 新增指令: CP d8
+            0xFE => {
+                let n = self.fetch();
+                self.alu_cp(n);
+            } // CP d8
+            // 新增指令: EI (Enable Interrupts)
+            0xFB => {
+                // 在實際的 Game Boy 中，EI 指令會在下一條指令執行後才啟用中斷
+                // 為了簡化，我們暫時假定立即啟用了中斷
+                // 待實現完整中斷處理系統時再精確模擬
+                // 這裡只是一個空操作
+            } // EI
             // 8-bit LD r, r' 指令 (0x40~0x7F)
             0x40 => {
                 self.registers.b = self.registers.b;
@@ -1176,10 +1209,7 @@ impl CPU {
                             7 => self.registers.a |= 1 << bit,
                             _ => {}
                         }
-                    }
-                    _ => {
-                        println!("未處理的 CB 指令: 0x{:02X}", cb_opcode);
-                    }
+                    } // 所有 CB 指令都已處理
                 }
             }
             0xC9 => {
