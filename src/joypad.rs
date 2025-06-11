@@ -156,16 +156,15 @@ impl Joypad {
         if self.debug_enabled {
             self.log_register_access(value);
         }
-    }
-
-    // 添加寫入寄存器方法（處理MMU對0xFF00的寫入）
+    } // 添加寫入寄存器方法（處理MMU對0xFF00的寫入）
     pub fn write_register(&mut self, value: u8) {
         // 只有低兩位可以被寫入，用於選擇按鍵組
-        self.select_direction = (value & 0x10) == 0;  // 位4為0時選擇方向鍵
-        self.select_action = (value & 0x20) == 0;     // 位5為0時選擇動作鍵
-        
-        //self.log_event(&format!("寄存器寫入: 0x{:02X}, 方向鍵選擇: {}, 動作鍵選擇: {}", 
-        //                        value, self.select_direction, self.select_action));
+        self.select_direction = (value & 0x10) == 0; // 位4為0時選擇方向鍵
+        self.select_action = (value & 0x20) == 0; // 位5為0時選擇動作鍵
+
+        if self.debug_enabled {
+            self.log_register_access(value);
+        }
     }
 
     // 改進讀取寄存器方法

@@ -60,8 +60,7 @@ impl PPU {
     }
     pub fn set_oam(&mut self, data: [u8; 160]) {
         self.oam = data;
-    }
-    pub fn step(&mut self) {
+    }    pub fn step(&mut self, _mmu: &mut crate::mmu::MMU) {
         // 更新 FPS 計數器
         self.fps_counter += 1;
 
@@ -71,6 +70,9 @@ impl PPU {
             self.last_frame_time = now;
             // FPS 計數器會在需要時由 get_fps 方法讀取
         }
+
+        // 移除每幀都觸發 VBlank 中斷的錯誤邏輯
+        // VBlank 中斷應該由主循環中的掃描線邏輯來觸發
 
         // 檢查 LCD 是否啟用 (LCDC 第 7 位)
         if (self.lcdc & 0x80) == 0 {

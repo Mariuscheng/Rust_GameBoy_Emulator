@@ -206,11 +206,9 @@ impl MMU {
         fallback[0x0020] = 0xC9; // RET
 
         // RST 28H (0x0028): 簡單返回
-        fallback[0x0028] = 0xC9; // RET
-
-        // RST 30H (0x0030): 簡單返回
-        fallback[0x0030] = 0xC9; // RET        // RST 38H (0x0038): 軟體中斷處理 - 應該跳轉到實際處理程序或直接返回
-        fallback[0x0038] = 0xC9; // RET (普通返回，不是中斷返回)
+        fallback[0x0028] = 0xC9; // RET        // RST 30H (0x0030): 簡單返回
+        fallback[0x0030] = 0xC9; // RET        // RST 38H (0x0038): 軟體中斷處理 - 使用正確的中斷返回
+        fallback[0x0038] = 0xC9; // RET (簡單返回，不應該是中斷處理程序)
 
         // VBlank 中斷向量 (0x0040)
         fallback[0x0040] = 0xD9; // RETI (從中斷返回並啟用中斷)
@@ -602,7 +600,16 @@ impl MMU {
                     value |= 0x20; // bit 5 = 1 表示動作鍵未選擇
                 } else {
                     value &= !0x20; // bit 5 = 0 表示動作鍵已選擇
-                }
+                } // 添加調試信息以監控按鍵讀取
+                  // 始終顯示調試信息以監控是否有ROM讀取
+                println!(
+                    "🎮 ROM讀取手柄寄存器: 返回值=0x{:02X}, 方向鍵選擇={}, 動作鍵選擇={}, 方向鍵狀態=0x{:02X}, 動作鍵狀態=0x{:02X}",
+                    value,
+                    self.joypad.select_direction,
+                    self.joypad.select_action,
+                    self.joypad.direction_keys,
+                    self.joypad.action_keys
+                );
 
                 value
             }
@@ -691,6 +698,22 @@ impl MMU {
                         self.joypad.select_direction = (select_bits & 0x10) == 0;
                         self.memory[addr as usize] =
                             (self.memory[addr as usize] & 0xCF) | select_bits;
+
+                        // 檢查是否有按鍵被按下，如果有則觸發手柄中斷
+                        if self.joypad.select_direction && self.joypad.direction_keys != 0x0F {
+                            // 方向鍵有按下，觸發手柄中斷
+                            let mut if_reg = self.if_reg;
+                            if_reg |= 0x10; // 設置手柄中斷標誌 (bit 4)
+                            self.if_reg = if_reg;
+                            println!("🚨 觸發方向鍵中斷! IF=0x{:02X}", if_reg);
+                        }
+                        if self.joypad.select_action && self.joypad.action_keys != 0x0F {
+                            // 動作鍵有按下，觸發手柄中斷
+                            let mut if_reg = self.if_reg;
+                            if_reg |= 0x10; // 設置手柄中斷標誌 (bit 4)
+                            self.if_reg = if_reg;
+                            println!("🚨 觸發動作鍵中斷! IF=0x{:02X}", if_reg);
+                        }
                     }
                     0xFF01..=0xFF03 => {
                         // 串口和計時器
@@ -717,11 +740,10 @@ impl MMU {
                     0xFF40..=0xFF4B => {
                         // PPU控制寄存器
                         self.memory[addr as usize] = value;
-                    }
-                    0xFF46 => {
-                        // DMA傳輸
-                        self.memory[0xFF46] = value;
-                        self.dma_transfer(value);
+                        // 特殊處理 DMA傳輸 (0xFF46)
+                        if addr == 0xFF46 {
+                            self.dma_transfer(value);
+                        }
                     }
                     _ => {
                         // 其他I/O寄存器

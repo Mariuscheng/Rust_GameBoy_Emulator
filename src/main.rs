@@ -158,12 +158,24 @@ fn main() {
        // - Bit 0: BG & Window 顯示開啟 (1)
     let initial_lcdc = 0x91;
     cpu.mmu.write_byte(0xFF40, initial_lcdc);
-    ppu.set_lcdc(initial_lcdc); // 設置 BGP 為標準 Game Boy 調色板
-                                // 0xE4 (11100100) = %11 %10 %01 %00 的顏色值順序，即：
-                                // - 顏色 3 = 黑 (11)
-                                // - 顏色 2 = 深灰 (10)
-                                // - 顏色 1 = 淺灰 (01)
-                                // - 顏色 0 = 白 (00)
+    ppu.set_lcdc(initial_lcdc);
+
+    // 設置中斷啟用寄存器 (IE) - 啟用 VBlank 和手柄中斷
+    let ie_value = 0x11; // bit 0 (VBlank) + bit 4 (Joypad) = 0x01 + 0x10 = 0x11
+    cpu.mmu.write_byte(0xFFFF, ie_value);
+
+    // 啟用中斷主開關
+    cpu.ime = true;
+
+    println!(
+        "🎮 中斷系統設置完成: IE=0x{:02X}, IME={}",
+        ie_value, cpu.ime
+    ); // 設置 BGP 為標準 Game Boy 調色板
+       // 0xE4 (11100100) = %11 %10 %01 %00 的顏色值順序，即：
+       // - 顏色 3 = 黑 (11)
+       // - 顏色 2 = 深灰 (10)
+       // - 顏色 1 = 淺灰 (01)
+       // - 顏色 0 = 白 (00)
     let standard_palette = 0xE4;
     cpu.mmu.write_byte(0xFF47, standard_palette);
 
@@ -283,10 +295,24 @@ fn main() {
         if joypad_updated {
             joypad.update();
 
+            // **關鍵修復**: 將手柄狀態同步到 CPU 的 MMU 中
+            cpu.mmu.joypad.direction_keys = joypad.direction_keys;
+            cpu.mmu.joypad.action_keys = joypad.action_keys;
+            cpu.mmu.joypad.select_direction = joypad.select_direction;
+            cpu.mmu.joypad.select_action = joypad.select_action;
+
+            // **新增**: 當有按鍵按下時觸發手柄中斷
+            if joypad.direction_keys != 0x0F || joypad.action_keys != 0x0F {
+                let mut if_reg = cpu.mmu.read_byte(0xFF0F);
+                if_reg |= 0x10; // 設置手柄中斷標誌 (bit 4)
+                cpu.mmu.write_byte(0xFF0F, if_reg);
+                println!("🚨 手柄按鍵觸發中斷! IF=0x{:02X}", if_reg);
+            }
+
             // 不要強制設置手柄寄存器模式，讓 ROM 自己控制
             // ROM 會通過寫入 0xFF00 來選擇要讀取的按鍵組
 
-            println!("🎮 手柄狀態更新完成");
+            println!("🎮 手柄狀態更新完成，已同步到MMU");
         }
 
         // 確保 LCDC 設定正確，僅保證 LCD 顯示始終啟用
@@ -329,37 +355,48 @@ fn main() {
                         cpu.registers.pc += 3; // 跳過當前循環
                         cpu.registers.b = 0; // B寄存器設為0，完成循環
                         loop_detected = true;
-                    }
-                    // 在main.rs中改進循環檢測邏輯
+                    } // 在main.rs中改進循環檢測邏輯                    // 簡化死循環檢測 - RST 38H 問題現在由 CPU fetch 方法處理
                     if cpu.registers.pc == 0x0038 && repeat_count > 100 {
-                        println!("偵測到VBlank中斷處理循環，堆疊可能損壞");
+                        println!("⚠️ 檢測到長時間停留在 RST 38H (0x0038)");
                         println!("堆疊指針: SP=0x{:04X}", cpu.registers.sp);
 
-                        // 檢查堆疊頂部數據
-                        if cpu.registers.sp < 0xFFFE {
-                            let ret_lo = cpu.mmu.read_byte(cpu.registers.sp);
-                            let ret_hi = cpu.mmu.read_byte(cpu.registers.sp + 1);
-                            println!("堆疊頂部返回地址: 0x{:02X}{:02X}", ret_hi, ret_lo);
-                        }
+                        // 現在直接跳到安全位置，不再嘗試手動修復堆疊
+                        println!("🔧 重置到安全狀態...");
+                        cpu.registers.pc = 0x0100; // 跳回ROM入口點
+                        cpu.registers.sp = 0xFFFE; // 重置堆疊指針
+                        repeat_count = 0;
+                    }
+
+                    // 處理其他類型的死循環
+                    if cpu.registers.pc == 0x0040 && repeat_count > 100 {
+                        println!("檢測到VBlank中斷處理循環");
+                        println!("堆疊指針: SP=0x{:04X}", cpu.registers.sp);
 
                         // 強制從中斷處理返回
-                        if repeat_count > 500 {
-                            println!("🚨 強制從中斷例程返回...");
-                            // 如果堆疊看起來合理，嘗試返回
+                        if repeat_count > 300 {
+                            println!("🚨 強制從VBlank中斷返回...");
+                            // 清除中斷標誌
+                            let mut if_reg = cpu.mmu.read_byte(0xFF0F);
+                            if_reg &= !0x01; // 清除 VBlank 中斷標誌
+                            cpu.mmu.write_byte(0xFF0F, if_reg);
+
+                            // 強制返回
                             if cpu.registers.sp < 0xFFFE - 2 {
                                 let lo = cpu.mmu.read_byte(cpu.registers.sp) as u16;
                                 cpu.registers.sp = cpu.registers.sp.wrapping_add(1);
                                 let hi = cpu.mmu.read_byte(cpu.registers.sp) as u16;
                                 cpu.registers.sp = cpu.registers.sp.wrapping_add(1);
                                 cpu.registers.pc = (hi << 8) | lo;
+                                cpu.ime = true; // 重新啟用中斷
                             } else {
                                 // 堆疊可能已損壞，直接跳過
                                 cpu.registers.pc = 0x0100; // 跳回ROM入口點
+                                cpu.registers.sp = 0xFFFE; // 重置堆疊指針
                             }
                             repeat_count = 0;
                         }
                     }
-                    repeat_count = 0;
+                    // repeat_count 重置移到具體處理分支中
                 }
             } else {
                 repeat_count = 0;
@@ -367,20 +404,22 @@ fn main() {
             }
 
             cpu.step();
-            cycle_count += 4;
-
-            // 模擬掃描線週期
+            cycle_count += 4; // 模擬掃描線週期
             if cycle_count >= 456 {
                 cycle_count = 0;
                 let current_ly = cpu.mmu.read_byte(0xFF44);
                 let next_ly = if current_ly >= 153 { 0 } else { current_ly + 1 };
                 cpu.mmu.write_byte(0xFF44, next_ly);
 
-                // VBlank 中斷
-                if next_ly == 144 {
+                // VBlank 中斷只在進入 VBlank 期間觸發（LY = 144）
+                if current_ly == 143 && next_ly == 144 {
                     let mut if_reg = cpu.mmu.read_byte(0xFF0F);
-                    if_reg |= 0x01;
-                    cpu.mmu.write_byte(0xFF0F, if_reg);
+                    if (if_reg & 0x01) == 0 {
+                        // 只有當 VBlank 中斷標誌未設置時才觸發
+                        if_reg |= 0x01;
+                        cpu.mmu.write_byte(0xFF0F, if_reg);
+                        println!("🔄 觸發 VBlank 中斷 (LY: {} -> {})", current_ly, next_ly);
+                    }
                 }
             }
         }
@@ -406,10 +445,8 @@ fn main() {
         ppu.set_scy(cpu.mmu.read_byte(0xFF42));
         ppu.set_wx(cpu.mmu.read_byte(0xFF4B));
         ppu.set_wy(cpu.mmu.read_byte(0xFF4A));
-        ppu.set_lcdc(fixed_lcdc);
-
-        // 執行 PPU 渲染
-        ppu.step();
+        ppu.set_lcdc(fixed_lcdc); // 執行 PPU 渲染
+        ppu.step(&mut cpu.mmu);
 
         // 獲取並顯示 FPS
         let fps = ppu.get_fps();

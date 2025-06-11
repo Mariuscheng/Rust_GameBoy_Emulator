@@ -76,4 +76,25 @@ impl Timer {
             _ => {}
         }
     }
+    pub fn write_register(&mut self, addr: u16, value: u8) {
+        match addr {
+            0xFF04 => {
+                // DIV register (reset to 0 on write)
+                // Implement your logic here if needed
+            }
+            0xFF05 => {
+                // TIMA register
+                // Implement your logic here if needed
+            }
+            0xFF06 => {
+                // TMA register
+                // Implement your logic here if needed
+            }
+            0xFF07 => {
+                // TAC register
+                // Implement your logic here if needed
+            }
+            _ => {}
+        }
+    }
 }

@@ -218,8 +218,10 @@ impl CPU {
             halted: false, // CPU 初始狀態為未暫停
         }
     }
-
     pub fn step(&mut self) {
+        // 首先處理中斷
+        self.handle_interrupts();
+        // 然後執行指令
         self.execute();
     }
 
@@ -232,10 +234,42 @@ impl CPU {
         self.decode_and_execute(opcode);
         self.instruction_count += 1;
     }
-
     fn fetch(&mut self) -> u8 {
+        // 檢查 PC 是否指向非法地址
+        if self.registers.pc >= 0xFF00 {
+            println!(
+                "🚨 警告：CPU 嘗試從非法地址 0x{:04X} 讀取指令！",
+                self.registers.pc
+            );
+
+            // 如果 PC 指向 I/O 區域或中斷向量，這是不正常的
+            // 強制跳轉到安全位置
+            if self.registers.pc == 0xFFFF {
+                println!("💀 致命錯誤：PC 指向 IE 寄存器 (0xFFFF)");
+                println!("🔧 自動修復：重置到 ROM 入口點");
+                self.registers.pc = 0x0100; // Game Boy ROM 入口點
+                self.registers.sp = 0xFFFE; // 重置堆疊指針
+            } else if self.registers.pc >= 0xFF80 && self.registers.pc <= 0xFFFE {
+                println!(
+                    "💀 致命錯誤：PC 指向 HRAM 區域 (0x{:04X})",
+                    self.registers.pc
+                );
+                println!("🔧 自動修復：重置到 ROM 入口點");
+                self.registers.pc = 0x0100;
+                self.registers.sp = 0xFFFE;
+            } else {
+                println!(
+                    "💀 致命錯誤：PC 指向 I/O 區域 (0x{:04X})",
+                    self.registers.pc
+                );
+                println!("🔧 自動修復：重置到 ROM 入口點");
+                self.registers.pc = 0x0100;
+                self.registers.sp = 0xFFFE;
+            }
+        }
+
         let opcode = self.mmu.read_byte(self.registers.pc);
-        self.registers.pc += 1;
+        self.registers.pc = self.registers.pc.wrapping_add(1);
         opcode
     }
 
@@ -273,6 +307,22 @@ impl CPU {
                 let offset = self.fetch() as i8;
                 let z_flag = (self.registers.f & 0x80) != 0;
                 if z_flag {
+                    self.registers.pc = ((self.registers.pc as i32) + (offset as i32)) as u16;
+                }
+            }
+            0x30 => {
+                // JR NC, n (如果 C 標誌未設置則相對跳轉)
+                let offset = self.fetch() as i8;
+                let c_flag = (self.registers.f & 0x10) != 0;
+                if !c_flag {
+                    self.registers.pc = ((self.registers.pc as i32) + (offset as i32)) as u16;
+                }
+            }
+            0x38 => {
+                // JR C, n (如果 C 標誌設置則相對跳轉)
+                let offset = self.fetch() as i8;
+                let c_flag = (self.registers.f & 0x10) != 0;
+                if c_flag {
                     self.registers.pc = ((self.registers.pc as i32) + (offset as i32)) as u16;
                 }
             }
@@ -416,6 +466,17 @@ impl CPU {
             0x33 => {
                 // INC SP
                 self.registers.sp = self.registers.sp.wrapping_add(1);
+            }
+            0x34 => {
+                // INC (HL) - 遞增HL指向的記憶體值
+                let addr = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                let value = self.mmu.read_byte(addr);
+                let result = value.wrapping_add(1);
+                self.mmu.write_byte(addr, result);
+
+                self.registers.set_z_flag(result == 0);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag((value & 0x0F) == 0x0F);
             }
             0x0B => {
                 // DEC BC
@@ -1205,18 +1266,6 @@ impl CPU {
 
                 self.registers.a = result;
             }
-            0x0F => {
-                // RRCA (右旋轉累加器)
-                let a = self.registers.a;
-                let result = (a >> 1) | ((a & 0x01) << 7);
-
-                self.registers.set_z_flag(false);
-                self.registers.set_n_flag(false);
-                self.registers.set_h_flag(false);
-                self.registers.set_c_flag((a & 0x01) != 0);
-
-                self.registers.a = result;
-            }
 
             // 添加缺失的指令
             0x07 => {
@@ -1239,6 +1288,20 @@ impl CPU {
                 self.mmu.write_byte(addr, (self.registers.sp & 0xFF) as u8);
                 self.mmu
                     .write_byte(addr + 1, (self.registers.sp >> 8) as u8);
+            }
+            0x09 => {
+                // ADD HL, BC (將BC加到HL)
+                let hl = ((self.registers.h as u16) << 8) | (self.registers.l as u16);
+                let bc = ((self.registers.b as u16) << 8) | (self.registers.c as u16);
+                let result = hl.wrapping_add(bc);
+
+                self.registers.set_n_flag(false);
+                self.registers
+                    .set_h_flag((hl & 0x0FFF) + (bc & 0x0FFF) > 0x0FFF);
+                self.registers.set_c_flag(result < hl);
+
+                self.registers.h = (result >> 8) as u8;
+                self.registers.l = (result & 0xFF) as u8;
             }
             0x0A => {
                 // LD A, (BC)
@@ -1977,5 +2040,81 @@ impl CPU {
                 println!("未處理的指令: 0x{:02X}", opcode);
             }
         }
+    }
+
+    fn handle_interrupts(&mut self) {
+        if !self.ime {
+            return; // 中斷被禁用
+        }
+
+        let if_reg = self.mmu.read_byte(0xFF0F); // 中斷標誌寄存器
+        let ie_reg = self.mmu.read_byte(0xFFFF); // 中斷啟用寄存器
+
+        let pending_interrupts = if_reg & ie_reg;
+
+        if pending_interrupts != 0 {
+            // 有待處理的中斷
+            self.ime = false; // 禁用中斷
+
+            // 檢查手柄中斷 (bit 4)
+            if (pending_interrupts & 0x10) != 0 {
+                println!("🚨 處理手柄中斷!");
+                // 清除手柄中斷標誌
+                let new_if = if_reg & !0x10;
+                self.mmu.write_byte(0xFF0F, new_if);
+
+                // 跳轉到手柄中斷處理程序 (0x0060)
+                self.push_word(self.registers.pc);
+                self.registers.pc = 0x0060;
+                return;
+            }
+
+            // 檢查VBlank中斷 (bit 0)
+            if (pending_interrupts & 0x01) != 0 {
+                // 清除VBlank中斷標誌
+                let new_if = if_reg & !0x01;
+                self.mmu.write_byte(0xFF0F, new_if);
+
+                // 跳轉到VBlank中斷處理程序 (0x0040)
+                self.push_word(self.registers.pc);
+                self.registers.pc = 0x0040;
+                return;
+            }
+
+            // 檢查其他中斷 (LCDC, Timer, Serial)
+            if (pending_interrupts & 0x02) != 0 {
+                // LCDC 中斷
+                let new_if = if_reg & !0x02;
+                self.mmu.write_byte(0xFF0F, new_if);
+                self.push_word(self.registers.pc);
+                self.registers.pc = 0x0048;
+                return;
+            }
+
+            if (pending_interrupts & 0x04) != 0 {
+                // Timer 中斷
+                let new_if = if_reg & !0x04;
+                self.mmu.write_byte(0xFF0F, new_if);
+                self.push_word(self.registers.pc);
+                self.registers.pc = 0x0050;
+                return;
+            }
+
+            if (pending_interrupts & 0x08) != 0 {
+                // Serial 中斷
+                let new_if = if_reg & !0x08;
+                self.mmu.write_byte(0xFF0F, new_if);
+                self.push_word(self.registers.pc);
+                self.registers.pc = 0x0058;
+                return;
+            }
+        }
+    }
+
+    fn push_word(&mut self, value: u16) {
+        self.registers.sp = self.registers.sp.wrapping_sub(1);
+        self.mmu.write_byte(self.registers.sp, (value >> 8) as u8);
+        self.registers.sp = self.registers.sp.wrapping_sub(1);
+        self.mmu.write_byte(self.registers.sp, value as u8);
     }
 }
