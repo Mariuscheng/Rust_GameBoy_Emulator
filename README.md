@@ -1,4 +1,4 @@
-# Game Boy Emulator
+# Game Boy Emulator(未完成)
 
 這是一個用 Rust 語言編寫的 Game Boy 模擬器專案。該模擬器旨在模擬原始 Game Boy 的硬體行為，並能夠運行 Game Boy 遊戲。目前已經能夠運行多種Game Boy遊戲，如俄羅斯方塊(Tetris)和超級瑪莉歐大陸(Super Mario Land)。
 
