@@ -197,6 +197,7 @@ impl Channel3 {
             return;
         }
 
+        // 正確的頻率計算
         let freq_hz = 65536.0 / (2048.0 - self.frequency as f32);
         self.phase += freq_hz / 4194304.0;
 
@@ -204,21 +205,36 @@ impl Channel3 {
             self.phase -= 1.0;
         }
 
-        // 從波形表獲取樣本
-        let sample_index = (self.phase * 32.0) as usize % 32;
-        let wave_sample = self.wave_ram[sample_index];
-
-        // 應用音量設置
-        let volume_shift = match self.volume {
-            0 => 4, // 靜音
-            1 => 0, // 100%
-            2 => 1, // 50%
-            3 => 2, // 25%
-            _ => 4,
+        // 獲取波形表中的樣本
+        let pos = (self.phase * 32.0) as usize;
+        let sample = if pos % 2 == 0 {
+            self.wave_ram[pos / 2] >> 4
+        } else {
+            self.wave_ram[pos / 2] & 0x0F
         };
 
-        let sample_value = (wave_sample >> volume_shift) as f32 / 15.0;
-        self.sample = (sample_value - 0.5) * 0.5; // 轉換到 -0.25 到 0.25 範圍
+        // 根據音量設置進行縮放
+        self.sample = match self.volume {
+            0 => 0.0,
+            1 => (sample as f32 / 15.0) * 1.0,  // 100%
+            2 => (sample as f32 / 15.0) * 0.5,  // 50%
+            3 => (sample as f32 / 15.0) * 0.25, // 25%
+            _ => 0.0,
+        };
+    }
+
+    pub fn write_wave_ram(&mut self, addr: usize, value: u8) {
+        if addr < self.wave_ram.len() {
+            self.wave_ram[addr] = value;
+        }
+    }
+
+    pub fn read_wave_ram(&self, addr: usize) -> u8 {
+        if addr < self.wave_ram.len() {
+            self.wave_ram[addr]
+        } else {
+            0
+        }
     }
 
     pub fn trigger(&mut self) {
@@ -232,10 +248,14 @@ pub struct Channel4 {
     pub enabled: bool,
     pub length_counter: u8,
     pub volume: u8,
+    pub envelope_period: u8,
+    pub envelope_direction: bool,
+    pub divisor_code: u8,
+    pub width_mode: bool,
+    pub clock_shift: u8,
     pub sample: f32,
-    pub lfsr: u16, // 線性反饋移位寄存器
-    pub clock_divider: u32,
-    pub clock_counter: u32,
+    lfsr: u16, // 線性反饋移位寄存器
+    timer: u32,
 }
 
 impl Channel4 {
@@ -244,10 +264,14 @@ impl Channel4 {
             enabled: false,
             length_counter: 0,
             volume: 0,
+            envelope_period: 0,
+            envelope_direction: false,
+            divisor_code: 0,
+            width_mode: false,
+            clock_shift: 0,
             sample: 0.0,
             lfsr: 0x7FFF,
-            clock_divider: 1,
-            clock_counter: 0,
+            timer: 0,
         }
     }
 
@@ -263,18 +287,38 @@ impl Channel4 {
             return;
         }
 
-        self.clock_counter += 1;
-        if self.clock_counter >= self.clock_divider {
-            self.clock_counter = 0;
+        // 計算分頻比
+        let divisor = match self.divisor_code {
+            0 => 8,
+            1 => 16,
+            2 => 32,
+            3 => 48,
+            4 => 64,
+            5 => 80,
+            6 => 96,
+            7 => 112,
+            _ => 8,
+        };
 
-            // 更新LFSR
-            let bit = ((self.lfsr >> 1) ^ self.lfsr) & 1;
+        // 更新定時器
+        self.timer += 1;
+        let period = divisor << self.clock_shift;
+
+        if self.timer >= period {
+            self.timer = 0;
+
+            // 更新 LFSR
+            let bit = (self.lfsr & 1) ^ ((self.lfsr >> 1) & 1);
             self.lfsr >>= 1;
             self.lfsr |= bit << 14;
 
-            // 生成噪音樣本
-            let noise_bit = (self.lfsr & 1) as f32;
-            self.sample = if noise_bit != 0.0 {
+            if self.width_mode {
+                self.lfsr &= !(1 << 6);
+                self.lfsr |= bit << 6;
+            }
+
+            // 生成輸出
+            self.sample = if self.lfsr & 1 == 0 {
                 (self.volume as f32 / 15.0) * 0.5
             } else {
                 -(self.volume as f32 / 15.0) * 0.5
@@ -285,12 +329,34 @@ impl Channel4 {
     pub fn trigger(&mut self) {
         self.enabled = true;
         self.lfsr = 0x7FFF;
-        self.clock_counter = 0;
+        self.timer = 0;
+    }
+
+    pub fn write_nr41(&mut self, value: u8) {
+        self.length_counter = value & 0x3F;
+    }
+
+    pub fn write_nr42(&mut self, value: u8) {
+        self.volume = value >> 4;
+        self.envelope_direction = (value & 0x08) != 0;
+        self.envelope_period = value & 0x07;
+    }
+
+    pub fn write_nr43(&mut self, value: u8) {
+        self.clock_shift = (value >> 4) & 0x0F;
+        self.width_mode = (value & 0x08) != 0;
+        self.divisor_code = value & 0x07;
+    }
+
+    pub fn write_nr44(&mut self, value: u8) {
+        if value & 0x80 != 0 {
+            self.trigger();
+        }
     }
 }
 
 // ============================================================================
-// APU 主結構體
+// APU 主結構体
 // ============================================================================
 
 pub struct APU {
@@ -332,6 +398,78 @@ pub struct APU {
     pub debug_file: Option<File>,
     pub register_write_count: u64,
     pub audio_step_count: u64,
+
+    // APU 主控制
+    pub control: APUControl,
+
+    frame_sequencer: u8,
+    frame_cycles: u32,
+}
+
+pub struct APUControl {
+    pub enabled: bool,
+    pub left_volume: u8,
+    pub right_volume: u8,
+    pub left_enables: [bool; 4],  // 左聲道啟用狀態
+    pub right_enables: [bool; 4], // 右聲道啟用狀態
+    pub vin_left_enable: bool,
+    pub vin_right_enable: bool,
+}
+
+impl APUControl {
+    pub fn new() -> Self {
+        Self {
+            enabled: false,
+            left_volume: 0,
+            right_volume: 0,
+            left_enables: [false; 4],
+            right_enables: [false; 4],
+            vin_left_enable: false,
+            vin_right_enable: false,
+        }
+    }
+
+    pub fn write_nr50(&mut self, value: u8) {
+        self.left_volume = (value >> 4) & 0x7;
+        self.right_volume = value & 0x7;
+        self.vin_left_enable = value & 0x80 != 0;
+        self.vin_right_enable = value & 0x08 != 0;
+    }
+
+    pub fn write_nr51(&mut self, value: u8) {
+        for i in 0..4 {
+            self.left_enables[i] = value & (0x10 << i) != 0;
+            self.right_enables[i] = value & (0x01 << i) != 0;
+        }
+    }
+
+    pub fn write_nr52(&mut self, value: u8) {
+        self.enabled = value & 0x80 != 0;
+    }
+
+    pub fn read_nr50(&self) -> u8 {
+        (if self.vin_left_enable { 0x80 } else { 0 })
+            | (self.left_volume << 4)
+            | (if self.vin_right_enable { 0x08 } else { 0 })
+            | self.right_volume
+    }
+
+    pub fn read_nr51(&self) -> u8 {
+        let mut value = 0;
+        for i in 0..4 {
+            if self.left_enables[i] {
+                value |= 0x10 << i;
+            }
+            if self.right_enables[i] {
+                value |= 0x01 << i;
+            }
+        }
+        value
+    }
+
+    pub fn read_nr52(&self) -> u8 {
+        if self.enabled { 0x80 } else { 0 }
+    }
 }
 
 impl APU {
@@ -378,6 +516,11 @@ impl APU {
             debug_file,
             register_write_count: 0,
             audio_step_count: 0,
+
+            control: APUControl::new(),
+
+            frame_sequencer: 0,
+            frame_cycles: 0,
         }
     }
 
@@ -388,6 +531,23 @@ impl APU {
         }
 
         self.audio_step_count += 1;
+
+        // 更新框架定序器 (每 8192 個時鐘週期)
+        self.frame_cycles += 1;
+        if self.frame_cycles >= 8192 {
+            self.frame_cycles = 0;
+            self.frame_sequencer = (self.frame_sequencer + 1) % 8;
+
+            match self.frame_sequencer {
+                0 | 4 => self.clock_length(), // 長度計數器 (256Hz)
+                2 | 6 => {
+                    self.clock_length();
+                    self.clock_sweep(); // 掃頻 (128Hz)
+                }
+                7 => self.clock_envelope(), // 音量包絡 (64Hz)
+                _ => {}
+            }
+        }
 
         // 更新所有通道
         self.ch1.step();
@@ -401,196 +561,276 @@ impl APU {
         }
     }
 
+    fn clock_length(&mut self) {
+        // 實現長度計數器更新邏輯
+        if self.ch1.length_counter > 0 {
+            self.ch1.length_counter -= 1;
+            if self.ch1.length_counter == 0 {
+                self.ch1.enabled = false;
+            }
+        }
+        // 對其他通道執行相同操作...
+    }
+
+    fn clock_sweep(&mut self) {
+        // 實現 Channel 1 的掃頻功能
+        if self.ch1.sweep_enabled && self.ch1.sweep_period > 0 {
+            let delta = self.ch1.frequency >> self.ch1.sweep_shift;
+            if self.ch1.sweep_direction {
+                self.ch1.frequency = self.ch1.frequency.saturating_sub(delta);
+            } else {
+                self.ch1.frequency = self.ch1.frequency.saturating_add(delta);
+            }
+        }
+    }
+
+    fn clock_envelope(&mut self) {
+        // 實現音量包絡更新邏輯
+    }
+
+    pub fn get_samples(&self) -> (f32, f32) {
+        if !self.control.enabled {
+            return (0.0, 0.0);
+        }
+
+        let mut left = 0.0;
+        let mut right = 0.0;
+
+        // 混音左聲道
+        if self.control.left_enables[0] {
+            left += self.ch1.get_sample();
+        }
+        if self.control.left_enables[1] {
+            left += self.ch2.get_sample();
+        }
+        if self.control.left_enables[2] {
+            left += self.ch3.get_sample();
+        }
+        if self.control.left_enables[3] {
+            left += self.ch4.get_sample();
+        }
+
+        // 混音右聲道
+        if self.control.right_enables[0] {
+            right += self.ch1.get_sample();
+        }
+        if self.control.right_enables[1] {
+            right += self.ch2.get_sample();
+        }
+        if self.control.right_enables[2] {
+            right += self.ch3.get_sample();
+        }
+        if self.control.right_enables[3] {
+            right += self.ch4.get_sample();
+        }
+
+        // 應用主音量控制
+        left *= (self.control.left_volume as f32 + 1.0) / 8.0;
+        right *= (self.control.right_volume as f32 + 1.0) / 8.0;
+
+        (left, right)
+    }
+
     pub fn read_reg(&self, addr: u16) -> u8 {
         match addr {
-            0xFF10 => self.nr10,
-            0xFF11 => self.nr11,
-            0xFF12 => self.nr12,
-            0xFF13 => self.nr13,
-            0xFF14 => self.nr14,
-
-            0xFF16 => self.nr21,
-            0xFF17 => self.nr22,
-            0xFF18 => self.nr23,
-            0xFF19 => self.nr24,
-
-            0xFF1A => self.nr30,
-            0xFF1B => self.nr31,
-            0xFF1C => self.nr32,
-            0xFF1D => self.nr33,
-            0xFF1E => self.nr34,
-
-            0xFF20 => self.nr41,
-            0xFF21 => self.nr42,
-            0xFF22 => self.nr43,
-            0xFF23 => self.nr44,
-
-            0xFF24 => self.nr50,
-            0xFF25 => self.nr51,
-            0xFF26 => self.nr52,
-
-            // 波形表 RAM (0xFF30-0xFF3F)
-            0xFF30..=0xFF3F => {
-                let index = ((addr - 0xFF30) * 2) as usize;
-                if index < self.ch3.wave_ram.len() {
-                    self.ch3.wave_ram[index]
-                } else {
-                    0xFF
-                }
-            }
-
+            0xFF10..=0xFF14 => self.read_ch1_reg(addr),
+            0xFF15..=0xFF19 => self.read_ch2_reg(addr),
+            0xFF1A..=0xFF1E => self.read_ch3_reg(addr),
+            0xFF1F..=0xFF23 => self.read_ch4_reg(addr),
+            0xFF24 => self.control.read_nr50(),
+            0xFF25 => self.control.read_nr51(),
+            0xFF26 => self.control.read_nr52(),
+            0xFF30..=0xFF3F => self.ch3.read_wave_ram((addr - 0xFF30) as usize),
             _ => 0xFF,
         }
     }
 
     pub fn write_reg(&mut self, addr: u16, value: u8) {
-        if self.debug_enabled {
-            self.register_write_count += 1;
-            self.log_register_write(addr, value);
-        }
-
-        // 如果APU關閉，只允許寫入NR52
-        if (self.nr52 & 0x80) == 0 && addr != 0xFF26 {
+        if !self.control.enabled && addr != 0xFF26 && addr < 0xFF30 {
             return;
         }
 
         match addr {
-            // 聲道1寄存器
+            0xFF10..=0xFF14 => self.write_ch1_reg(addr, value),
+            0xFF15..=0xFF19 => self.write_ch2_reg(addr, value),
+            0xFF1A..=0xFF1E => self.write_ch3_reg(addr, value),
+            0xFF1F..=0xFF23 => self.write_ch4_reg(addr, value),
+            0xFF24 => self.control.write_nr50(value),
+            0xFF25 => self.control.write_nr51(value),
+            0xFF26 => self.control.write_nr52(value),
+            0xFF30..=0xFF3F => self.ch3.write_wave_ram((addr - 0xFF30) as usize, value),
+            _ => {}
+        }
+    }
+
+    // 通道1寄存器訪問方法
+    fn read_ch1_reg(&self, addr: u16) -> u8 {
+        match addr {
             0xFF10 => {
-                self.nr10 = value;
+                ((self.ch1.sweep_period << 4)
+                    | (if self.ch1.sweep_direction { 0x08 } else { 0 })
+                    | self.ch1.sweep_shift)
+                    | 0x80
+            }
+            0xFF11 => (self.ch1.duty_cycle << 6) | 0x3F,
+            0xFF12 => (self.ch1.volume << 4) | 0x00,
+            0xFF13 => 0xFF,
+            0xFF14 => {
+                if self.ch1.enabled {
+                    0xFF
+                } else {
+                    0x7F
+                }
+            }
+            _ => 0xFF,
+        }
+    }
+
+    fn write_ch1_reg(&mut self, addr: u16, value: u8) {
+        match addr {
+            0xFF10 => {
                 self.ch1.sweep_period = (value >> 4) & 0x07;
                 self.ch1.sweep_direction = (value & 0x08) != 0;
                 self.ch1.sweep_shift = value & 0x07;
-                self.ch1.sweep_enabled = self.ch1.sweep_period > 0 || self.ch1.sweep_shift > 0;
             }
             0xFF11 => {
-                self.nr11 = value;
                 self.ch1.duty_cycle = (value >> 6) & 0x03;
-                self.ch1.length_counter = 64 - (value & 0x3F);
+                self.ch1.length_counter = value & 0x3F;
             }
             0xFF12 => {
-                self.nr12 = value;
-                self.ch1.volume = (value >> 4) & 0x0F;
+                self.ch1.volume = value >> 4;
             }
             0xFF13 => {
-                self.nr13 = value;
-                self.ch1.frequency = (self.ch1.frequency & 0xFF00) | value as u16;
+                self.ch1.frequency = (self.ch1.frequency & 0x700) | value as u16;
             }
             0xFF14 => {
-                self.nr14 = value;
-                self.ch1.frequency = (self.ch1.frequency & 0x00FF) | ((value as u16 & 0x07) << 8);
-                if (value & 0x80) != 0 {
+                self.ch1.frequency = (self.ch1.frequency & 0xFF) | ((value as u16 & 0x07) << 8);
+                if value & 0x80 != 0 {
                     self.ch1.trigger();
                 }
             }
+            _ => {}
+        }
+    }
 
-            // 聲道2寄存器
+    // 通道2寄存器訪問方法
+    fn read_ch2_reg(&self, addr: u16) -> u8 {
+        match addr {
+            0xFF16 => (self.ch2.duty_cycle << 6) | 0x3F,
+            0xFF17 => (self.ch2.volume << 4) | 0x00,
+            0xFF18 => 0xFF,
+            0xFF19 => {
+                if self.ch2.enabled {
+                    0xFF
+                } else {
+                    0x7F
+                }
+            }
+            _ => 0xFF,
+        }
+    }
+
+    fn write_ch2_reg(&mut self, addr: u16, value: u8) {
+        match addr {
             0xFF16 => {
-                self.nr21 = value;
                 self.ch2.duty_cycle = (value >> 6) & 0x03;
-                self.ch2.length_counter = 64 - (value & 0x3F);
+                self.ch2.length_counter = value & 0x3F;
             }
             0xFF17 => {
-                self.nr22 = value;
-                self.ch2.volume = (value >> 4) & 0x0F;
+                self.ch2.volume = value >> 4;
             }
             0xFF18 => {
-                self.nr23 = value;
-                self.ch2.frequency = (self.ch2.frequency & 0xFF00) | value as u16;
+                self.ch2.frequency = (self.ch2.frequency & 0x700) | value as u16;
             }
             0xFF19 => {
-                self.nr24 = value;
-                self.ch2.frequency = (self.ch2.frequency & 0x00FF) | ((value as u16 & 0x07) << 8);
-                if (value & 0x80) != 0 {
+                self.ch2.frequency = (self.ch2.frequency & 0xFF) | ((value as u16 & 0x07) << 8);
+                if value & 0x80 != 0 {
                     self.ch2.trigger();
                 }
             }
+            _ => {}
+        }
+    }
 
-            // 聲道3寄存器
+    // 通道3寄存器訪問方法
+    fn read_ch3_reg(&self, addr: u16) -> u8 {
+        match addr {
             0xFF1A => {
-                self.nr30 = value;
-                self.ch3.enabled = (value & 0x80) != 0;
+                if self.ch3.enabled {
+                    0xFF
+                } else {
+                    0x7F
+                }
+            }
+            0xFF1B => 0xFF,
+            0xFF1C => (self.ch3.volume << 5) | 0x9F,
+            0xFF1D => 0xFF,
+            0xFF1E => {
+                if self.ch3.enabled {
+                    0xFF
+                } else {
+                    0x7F
+                }
+            }
+            _ => 0xFF,
+        }
+    }
+
+    fn write_ch3_reg(&mut self, addr: u16, value: u8) {
+        match addr {
+            0xFF1A => {
+                self.ch3.enabled = value & 0x80 != 0;
             }
             0xFF1B => {
-                self.nr31 = value;
-                self.ch3.length_counter = 256 - value as u16;
+                self.ch3.length_counter = value as u16;
             }
             0xFF1C => {
-                self.nr32 = value;
                 self.ch3.volume = (value >> 5) & 0x03;
             }
             0xFF1D => {
-                self.nr33 = value;
-                self.ch3.frequency = (self.ch3.frequency & 0xFF00) | value as u16;
+                self.ch3.frequency = (self.ch3.frequency & 0x700) | value as u16;
             }
             0xFF1E => {
-                self.nr34 = value;
-                self.ch3.frequency = (self.ch3.frequency & 0x00FF) | ((value as u16 & 0x07) << 8);
-                if (value & 0x80) != 0 {
+                self.ch3.frequency = (self.ch3.frequency & 0xFF) | ((value as u16 & 0x07) << 8);
+                if value & 0x80 != 0 {
                     self.ch3.trigger();
                 }
             }
+            _ => {}
+        }
+    }
 
-            // 聲道4寄存器
-            0xFF20 => {
-                self.nr41 = value;
-                self.ch4.length_counter = 64 - (value & 0x3F);
-            }
+    // 通道4寄存器訪問方法
+    fn read_ch4_reg(&self, addr: u16) -> u8 {
+        match addr {
+            0xFF20 => 0xFF,
             0xFF21 => {
-                self.nr42 = value;
-                self.ch4.volume = (value >> 4) & 0x0F;
+                (self.ch4.volume << 4)
+                    | (if self.ch4.envelope_direction { 0x08 } else { 0 })
+                    | self.ch4.envelope_period
             }
             0xFF22 => {
-                self.nr43 = value;
-                let divisor = match value & 0x07 {
-                    0 => 8,
-                    n => (n as u32) * 16,
-                };
-                let shift = (value >> 4) & 0x0F;
-                self.ch4.clock_divider = divisor << shift;
+                (self.ch4.clock_shift << 4)
+                    | (if self.ch4.width_mode { 0x08 } else { 0 })
+                    | self.ch4.divisor_code
             }
             0xFF23 => {
-                self.nr44 = value;
-                if (value & 0x80) != 0 {
-                    self.ch4.trigger();
+                if self.ch4.enabled {
+                    0xFF
+                } else {
+                    0x7F
                 }
             }
+            _ => 0xFF,
+        }
+    }
 
-            // 主控制寄存器
-            0xFF24 => {
-                self.nr50 = value;
-            }
-            0xFF25 => {
-                self.nr51 = value;
-            }
-            0xFF26 => {
-                let was_enabled = (self.nr52 & 0x80) != 0;
-                self.nr52 = (value & 0x80) | (self.nr52 & 0x7F);
-
-                if !was_enabled && (value & 0x80) != 0 {
-                    // APU啟用 - 重置狀態
-                    self.reset_apu_state();
-                } else if was_enabled && (value & 0x80) == 0 {
-                    // APU關閉 - 清除所有通道
-                    self.ch1.enabled = false;
-                    self.ch2.enabled = false;
-                    self.ch3.enabled = false;
-                    self.ch4.enabled = false;
-                }
-            }
-
-            // 波形表 RAM (0xFF30-0xFF3F)
-            0xFF30..=0xFF3F => {
-                let index = ((addr - 0xFF30) * 2) as usize;
-                if index < self.ch3.wave_ram.len() {
-                    // 每個寄存器包含2個4位樣本
-                    self.ch3.wave_ram[index] = (value >> 4) & 0x0F;
-                    if index + 1 < self.ch3.wave_ram.len() {
-                        self.ch3.wave_ram[index + 1] = value & 0x0F;
-                    }
-                }
-            }
-
+    fn write_ch4_reg(&mut self, addr: u16, value: u8) {
+        match addr {
+            0xFF20 => self.ch4.write_nr41(value),
+            0xFF21 => self.ch4.write_nr42(value),
+            0xFF22 => self.ch4.write_nr43(value),
+            0xFF23 => self.ch4.write_nr44(value),
             _ => {}
         }
     }

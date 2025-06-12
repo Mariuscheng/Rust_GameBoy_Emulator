@@ -41,6 +41,9 @@ pub struct Joypad {
     debug_enabled: bool,
     debug_file: Option<File>,
     key_press_count: u64,
+
+    // 狀態管理
+    pub last_write: u8, // 最後寫入的值
 }
 
 impl Joypad {
@@ -55,11 +58,90 @@ impl Joypad {
             debug_enabled: true,
             debug_file,
             key_press_count: 0,
+            last_write: 0xFF,
         }
     }
 
-    pub fn set_debug_mode(&mut self, enabled: bool) {
-        self.debug_enabled = enabled;
+    // 獲取按鈕狀態 (FF00 寄存器讀取)
+    pub fn get_state(&self) -> u8 {
+        let mut value = 0xCF; // 高兩位未使用，總是返回 1
+
+        // 根據選擇位返回相應的按鈕狀態
+        if !self.select_direction {
+            value &= self.direction_keys;
+        }
+        if !self.select_action {
+            value &= self.action_keys;
+        }
+
+        // 應用去彈跳處理
+        self.debounce_input(value | 0xC0)
+    }
+
+    // 設置按鈕選擇狀態 (FF00 寄存器寫入)
+    pub fn set_state(&mut self, value: u8) {
+        self.last_write = value;
+        self.select_direction = (value & 0x10) == 0;
+        self.select_action = (value & 0x20) == 0;
+
+        if self.debug_enabled {
+            self.log_state_change(value);
+        }
+    }
+
+    // 更新特定按鈕的狀態
+    pub fn update_button(&mut self, direction_keys: u8, action_keys: u8) {
+        let old_direction = self.direction_keys;
+        let old_action = self.action_keys;
+
+        self.direction_keys = direction_keys;
+        self.action_keys = action_keys;
+
+        // 檢測是否有新的按鈕按下，用於觸發中斷
+        let any_new_press =
+            (old_direction & !direction_keys) != 0 || (old_action & !action_keys) != 0;
+
+        if any_new_press {
+            self.key_press_count += 1;
+            if self.debug_enabled {
+                self.log_button_press();
+            }
+        }
+    }
+
+    // 按鈕去彈跳處理
+    fn debounce_input(&self, value: u8) -> u8 {
+        // 簡單的去彈跳：忽略快速的狀態變化
+        if self.key_press_count % 2 == 0 {
+            value
+        } else {
+            self.last_write
+        }
+    }
+
+    // 記錄狀態變化
+    fn log_state_change(&mut self, value: u8) {
+        if let Some(ref mut file) = self.debug_file {
+            let timestamp = Local::now().format("%H:%M:%S%.3f");
+            let log_entry = format!(
+                "[{}] 寄存器寫入: 0x{:02X} (方向選擇={}, 按鈕選擇={})\n",
+                timestamp, value, self.select_direction, self.select_action
+            );
+            let _ = file.write_all(log_entry.as_bytes());
+            let _ = file.flush();
+        }
+    }
+
+    fn log_button_press(&mut self) {
+        if let Some(ref mut file) = self.debug_file {
+            let timestamp = Local::now().format("%H:%M:%S%.3f");
+            let log_entry = format!(
+                "[{}] 按鈕按下事件: 方向鍵=0x{:02X}, 動作鍵=0x{:02X}\n",
+                timestamp, self.direction_keys, self.action_keys
+            );
+            let _ = file.write_all(log_entry.as_bytes());
+            let _ = file.flush();
+        }
     }
 
     // 更新手柄狀態 (用於與主循環同步)
@@ -78,24 +160,6 @@ impl Joypad {
                     let _ = file.write_all(log_entry.as_bytes());
                     let _ = file.flush();
                 }
-            }
-        }
-    }
-
-    // 更新按鈕狀態 (用於直接從 MMU 設置)
-    pub fn update_button(&mut self, direction_keys: u8, action_keys: u8) {
-        self.direction_keys = direction_keys;
-        self.action_keys = action_keys;
-
-        if self.debug_enabled {
-            if let Some(ref mut file) = self.debug_file {
-                let timestamp = Local::now().format("%H:%M:%S%.3f");
-                let log_entry = format!(
-                    "[{}] 外部更新按鈕狀態: 方向鍵=0x{:02X}, 動作鍵=0x{:02X}\n",
-                    timestamp, direction_keys, action_keys
-                );
-                let _ = file.write_all(log_entry.as_bytes());
-                let _ = file.flush();
             }
         }
     }
@@ -188,13 +252,6 @@ impl Joypad {
         }
 
         result
-    }
-
-    // 獲取當前手柄狀態（用於與MMU交互）
-    pub fn get_joypad_state(&self) -> u8 {
-        // 返回組合的手柄狀態
-        // 高4位為方向鍵，低4位為動作鍵
-        (self.direction_keys << 4) | self.action_keys
     }
 
     // 檢查是否有按鍵按下 (用於中斷判斷)
@@ -354,6 +411,7 @@ impl Joypad {
         self.select_direction = false;
         self.select_action = false;
         self.key_press_count = 0;
+        self.last_write = 0xFF;
 
         if self.debug_enabled {
             if let Some(ref mut file) = self.debug_file {
@@ -362,6 +420,34 @@ impl Joypad {
                 let _ = file.write_all(log_entry.as_bytes());
                 let _ = file.flush();
             }
+        }
+    }
+
+    // 按下按鍵
+    pub fn press(&mut self, key: GameBoyKey) {
+        match key {
+            GameBoyKey::Right => self.direction_keys &= !0x01,
+            GameBoyKey::Left => self.direction_keys &= !0x02,
+            GameBoyKey::Up => self.direction_keys &= !0x04,
+            GameBoyKey::Down => self.direction_keys &= !0x08,
+            GameBoyKey::A => self.action_keys &= !0x01,
+            GameBoyKey::B => self.action_keys &= !0x02,
+            GameBoyKey::Select => self.action_keys &= !0x04,
+            GameBoyKey::Start => self.action_keys &= !0x08,
+        }
+    }
+
+    // 釋放按鍵
+    pub fn release(&mut self, key: GameBoyKey) {
+        match key {
+            GameBoyKey::Right => self.direction_keys |= 0x01,
+            GameBoyKey::Left => self.direction_keys |= 0x02,
+            GameBoyKey::Up => self.direction_keys |= 0x04,
+            GameBoyKey::Down => self.direction_keys |= 0x08,
+            GameBoyKey::A => self.action_keys |= 0x01,
+            GameBoyKey::B => self.action_keys |= 0x02,
+            GameBoyKey::Select => self.action_keys |= 0x04,
+            GameBoyKey::Start => self.action_keys |= 0x08,
         }
     }
 }
@@ -387,5 +473,27 @@ mod tests {
         joypad.select_action = true;
         let register_value = joypad.read_joypad_register(0xDF); // 選擇動作鍵
         assert_eq!(register_value & 0x0F, joypad.action_keys);
+    }
+}
+
+impl Clone for Joypad {
+    fn clone(&self) -> Self {
+        // 創建新的 debug file
+        let debug_file = if self.debug_enabled {
+            File::create("debug_report/joypad_debug.txt").ok()
+        } else {
+            None
+        };
+
+        Self {
+            direction_keys: self.direction_keys,
+            action_keys: self.action_keys,
+            select_direction: self.select_direction,
+            select_action: self.select_action,
+            debug_enabled: self.debug_enabled,
+            debug_file,
+            key_press_count: self.key_press_count,
+            last_write: self.last_write,
+        }
     }
 }

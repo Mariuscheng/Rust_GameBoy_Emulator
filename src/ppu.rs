@@ -1,3 +1,5 @@
+use crate::mmu::MMU;
+
 pub struct PPU {
     pub vram: [u8; 0x2000],                  // 8KB VRAM
     framebuffer: Vec<u32>,                   // 160x144 畫面
@@ -12,6 +14,11 @@ pub struct PPU {
     pub lcdc: u8,                            // LCD 控制寄存器
     pub last_frame_time: std::time::Instant, // 上一幀的時間
     pub fps_counter: u32,                    // FPS 計數器
+    pub mode: u8,                            // PPU 模式 (0-3)
+    pub ly: u8,                              // 當前掃描線 (LY)
+    pub lyc: u8,                             // LY 比較值 (LYC)
+    pub stat: u8,                            // STAT 寄存器
+    pub dots: u32,                           // 點時鐘計數器
 }
 
 impl PPU {
@@ -19,19 +26,23 @@ impl PPU {
         let ppu = Self {
             vram: [0; 0x2000],
             framebuffer: vec![0xFFFFFFFFu32; 160 * 144],
-            bgp: 0xE4,  // 使用標準 Game Boy 調色板 (11 10 01 00)
-            obp0: 0xFF, // sprite palette 0 預設
-            obp1: 0xFF, // sprite palette 1 預設
+            bgp: 0xE4, // 使用標準 Game Boy 調色板
+            obp0: 0xFF,
+            obp1: 0xFF,
             scx: 0,
             scy: 0,
-            wx: 0, // Game Boy 实际画面左上角（與MMU初始化值匹配）
+            wx: 0,
             wy: 0,
             oam: [0; 160],
-            lcdc: 0x91, // LCD 控制寄存器初始值 (LCD & BG 開啟，瓦片數據從 $8000-$8FFF)
+            lcdc: 0x91,
             last_frame_time: std::time::Instant::now(),
             fps_counter: 0,
+            mode: 0,
+            ly: 0,
+            lyc: 0,
+            stat: 0,
+            dots: 0,
         };
-
         ppu
     }
     pub fn set_bgp(&mut self, value: u8) {
@@ -60,202 +71,104 @@ impl PPU {
     }
     pub fn set_oam(&mut self, data: [u8; 160]) {
         self.oam = data;
-    }    pub fn step(&mut self, _mmu: &mut crate::mmu::MMU) {
-        // 更新 FPS 計數器
-        self.fps_counter += 1;
+    }
+    pub fn step(&mut self, mmu: &mut crate::mmu::MMU) {
+        // 更新掃描線時序
+        self.update_mode(mmu);
 
-        // 每秒計算一次 FPS
-        let now = std::time::Instant::now();
-        if now.duration_since(self.last_frame_time).as_millis() > 1000 {
-            self.last_frame_time = now;
-            // FPS 計數器會在需要時由 get_fps 方法讀取
-        }
-
-        // 移除每幀都觸發 VBlank 中斷的錯誤邏輯
-        // VBlank 中斷應該由主循環中的掃描線邏輯來觸發
-
-        // 檢查 LCD 是否啟用 (LCDC 第 7 位)
+        // 如果LCD關閉，清空畫面並返回
         if (self.lcdc & 0x80) == 0 {
-            // LCD 關閉，顯示更明顯的灰色背景，讓使用者知道LCD已關閉
-            // 使用 memset 類似的批量操作以提高性能
-            self.framebuffer.fill(0xFF666666u32); // 稍深的灰色，表示 LCD 關閉
+            self.framebuffer.fill(0xFF666666u32);
             return;
         }
 
-        // 檢查背景是否啟用 (LCDC 第 0 位)
-        let bg_enable = (self.lcdc & 0x01) != 0; // 初始化畫面 - 使用更高效的批量操作
-        self.framebuffer.fill(0xFFFFFFFFu32); // 白色背景
+        // 根據當前模式執行相應操作
+        match self.mode {
+            0 => { // H-Blank
+                // 在H-Blank期間不需要執行渲染操作
+            }
+            1 => { // V-Blank
+                // 在V-Blank期間不需要執行渲染操作
+            }
+            2 => {
+                // OAM Scan
+                self.scan_oam();
+            }
+            3 => {
+                // Drawing
+                if self.ly < 144 {
+                    self.render_scanline();
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
 
-        // 背景和 Window 渲染
-        for y in 0..144 {
-            for x in 0..160 {
-                let mut color = 0xFFFFFFFFu32; // 默認白色
+    fn update_mode(&mut self, mmu: &mut crate::mmu::MMU) {
+        // 更新點時鐘
+        self.dots += 1;
 
-                // 檢查Window是否啟用並且在範圍內 (LCDC 第 5 位)
-                let window_enable = (self.lcdc & 0x20) != 0;
-                let in_window = window_enable && y as u8 >= self.wy && x as u8 + 7 >= self.wx;
+        // 一條掃描線總共需要456個點時鐘
+        if self.dots >= 456 {
+            self.dots = 0;
+            self.ly = (self.ly + 1) % 154;
 
-                if in_window {
-                    // Window Layer
-                    // 根據 LCDC 第 6 位選擇窗口瓦片地圖
-                    // 0 = $9800-$9BFF, 1 = $9C00-$9FFF
-                    let win_tile_map_base = if (self.lcdc & 0x40) != 0 {
-                        0x1C00
-                    } else {
-                        0x1800
-                    };
-
-                    let wx = self.wx.saturating_sub(7);
-                    let win_x = (x as i16 - wx as i16).max(0) as usize;
-                    let win_y = (y as i16 - self.wy as i16).max(0) as usize;
-                    let tile_x = win_x / 8;
-                    let tile_y = win_y / 8;
-                    if tile_x < 32 && tile_y < 32 {
-                        let tile_map_addr = win_tile_map_base + tile_y * 32 + tile_x;
-                        if tile_map_addr < self.vram.len() {
-                            let tile_id = self.vram[tile_map_addr];
-                            let pixel_x = win_x % 8;
-                            let pixel_y = win_y % 8;
-                            color = self.get_tile_pixel_color(tile_id, pixel_x, pixel_y, self.bgp);
-                        }
-                    }
-                } else if bg_enable {
-                    // 背景層
-                    // 根據 LCDC 第 3 位選擇背景瓦片地圖
-                    // 0 = $9800-$9BFF, 1 = $9C00-$9FFF
-                    let bg_tile_map_base = if (self.lcdc & 0x08) != 0 {
-                        0x1C00
-                    } else {
-                        0x1800
-                    };
-
-                    let scrolled_x = (x as u8).wrapping_add(self.scx) as usize;
-                    let scrolled_y = (y as u8).wrapping_add(self.scy) as usize;
-                    let tile_x = (scrolled_x / 8) % 32;
-                    let tile_y = (scrolled_y / 8) % 32;
-                    let tile_map_addr = bg_tile_map_base + tile_y * 32 + tile_x;
-
-                    // 安全地取得瓦片 ID
-                    if tile_map_addr < self.vram.len() {
-                        let tile_id = self.vram[tile_map_addr];
-                        let pixel_x = scrolled_x % 8;
-                        let pixel_y = scrolled_y % 8;
-                        color = self.get_tile_pixel_color(tile_id, pixel_x, pixel_y, self.bgp);
-                    }
-                } // 由於我們確保 x < 160 且 y < 144，這裡可以直接寫入而無需檢查
-                let fb_idx = y * 160 + x;
-                self.framebuffer[fb_idx] = color;
+            // 檢查 LY=LYC 中斷
+            if self.ly == self.lyc {
+                self.stat |= 0x04; // 設置巧合標誌
+                if (self.stat & 0x40) != 0 {
+                    mmu.if_reg |= 0x02; // 觸發STAT中斷
+                }
+            } else {
+                self.stat &= !0x04; // 清除巧合標誌
             }
         }
 
-        // 檢查 Sprite (物體) 是否啟用 (LCDC 第 1 位)
-        let sprite_enable = (self.lcdc & 0x02) != 0;
+        let old_mode = self.mode;
 
-        if sprite_enable {
-            // 檢查 Sprite 大小 (LCDC 第 2 位)
-            // 0 = 8x8, 1 = 8x16
-            let sprite_size = if (self.lcdc & 0x04) != 0 { 16 } else { 8 };
+        // 更新PPU模式
+        self.mode = if self.ly >= 144 {
+            1 // V-Blank
+        } else {
+            if self.dots <= 80 {
+                2 // OAM Scan
+            } else if self.dots <= 252 {
+                3 // Drawing
+            } else {
+                0 // H-Blank
+            }
+        };
 
-            // Sprite 渲染（OAM 疊加）
-            for i in 0..40 {
-                let base = i * 4;
-                let y_pos = self.oam[base] as i16 - 16;
-                let x_pos = self.oam[base + 1] as i16 - 8;
-                let tile_idx = self.oam[base + 2] as usize;
-                let attr = self.oam[base + 3];
-                let flip_x = (attr & 0x20) != 0;
-                let flip_y = (attr & 0x40) != 0;
-                let priority = (attr & 0x80) != 0;
+        // 更新STAT寄存器的模式位
+        self.stat = (self.stat & 0xFC) | self.mode;
 
-                // 根據精靈屬性選擇使用 OBP0 或 OBP1 調色板
-                let palette_number = (attr & 0x10) != 0;
-                let palette = if palette_number { self.obp1 } else { self.obp0 };
-
-                // 如果座標超出畫面，跳過這個精靈
-                if x_pos <= -8 || x_pos >= 160 || y_pos <= -16 || y_pos >= 144 {
-                    continue;
-                }
-
-                // 如果使用 8x16 模式，低位需要調整
-                let mut tiles_to_render: [usize; 2] = [0, 0];
-                let tiles_len = if sprite_size == 16 {
-                    // 8x16 模式中，忽略最低位
-                    tiles_to_render[0] = tile_idx & 0xFE;
-                    tiles_to_render[1] = (tile_idx & 0xFE) + 1;
-                    2
-                } else {
-                    // 8x8 模式
-                    tiles_to_render[0] = tile_idx;
-                    1
-                };
-
-                // 渲染每個精靈瓦片
-                for tile_offset in 0..tiles_len {
-                    let tile = tiles_to_render[tile_offset];
-                    for py in 0..8 {
-                        let real_py = if sprite_size == 16 {
-                            py + tile_offset * 8
-                        } else {
-                            py
-                        };
-                        let sy = if flip_y {
-                            sprite_size - 1 - real_py
-                        } else {
-                            real_py
-                        };
-                        let screen_y = y_pos + sy as i16;
-
-                        if screen_y < 0 || screen_y >= 144 {
-                            continue;
-                        }
-
-                        for px in 0..8 {
-                            let sx = if flip_x { 7 - px } else { px };
-                            let screen_x = x_pos + px;
-
-                            if screen_x < 0 || screen_x >= 160 {
-                                continue;
-                            } // 獲取精靈瓦片數據
-                            let tile_addr = tile * 16 + (sy as usize % 8) * 2;
-
-                            if tile_addr + 1 >= self.vram.len() {
-                                continue;
-                            } // 使用優化的瓦片數據讀取，減少額外函數調用
-                            let low = if tile_addr < self.vram.len() {
-                                self.vram[tile_addr]
-                            } else {
-                                0
-                            };
-                            let high = if tile_addr + 1 < self.vram.len() {
-                                self.vram[tile_addr + 1]
-                            } else {
-                                0
-                            };
-                            let bit = 7 - sx as u8;
-                            let lo = (low >> bit) & 1;
-                            let hi = (high >> bit) & 1;
-                            let color_id = (hi << 1) | lo;
-
-                            // 顏色 0 是透明的
-                            if color_id == 0 {
-                                continue;
-                            } // 使用輔助函數獲取精靈顏色
-                            let color = self.get_color_from_palette(palette, color_id); // 座標合法檢查已經在外部進行，這裡可以直接訪問
-                            let idx = (screen_y as usize) * 160 + (screen_x as usize);
-
-                            // 精靈優先級處理：
-                            // 1. priority=0 時精靈總是在前景
-                            // 2. priority=1 時精靈在背景有顏色的區域後面
-                            let current_bg = self.framebuffer[idx];
-                            if !priority || current_bg == 0xFFFFFFFFu32 {
-                                self.framebuffer[idx] = color;
-                            }
-                        }
+        // 檢查模式變更中斷
+        if old_mode != self.mode {
+            match self.mode {
+                0 => {
+                    // H-Blank
+                    if (self.stat & 0x08) != 0 {
+                        mmu.if_reg |= 0x02;
                     }
                 }
+                1 => {
+                    // V-Blank
+                    mmu.if_reg |= 0x01; // 觸發V-Blank中斷
+                    if (self.stat & 0x10) != 0 {
+                        mmu.if_reg |= 0x02;
+                    }
+                }
+                2 => {
+                    // OAM
+                    if (self.stat & 0x20) != 0 {
+                        mmu.if_reg |= 0x02;
+                    }
+                }
+                _ => {}
             }
         }
     }
+
     pub fn get_framebuffer(&self) -> &[u32] {
         &self.framebuffer
     }
@@ -282,6 +195,10 @@ impl PPU {
             tile_data_addr = 0x1000 + ((signed_id as i16) + 128) as usize * 16 + pixel_y * 2;
         } // 確保地址在有效範圍內
         if tile_data_addr + 1 >= self.vram.len() {
+            println!(
+                "Warning: Tile address out of bounds: {:04X}",
+                tile_data_addr
+            );
             return 0xFFFFFFFFu32; // 如果超出範圍，返回白色
         }
 
@@ -352,10 +269,15 @@ impl PPU {
                 self.bgp,
                 self.obp0,
                 self.obp1,
-                self.scx, self.scy,
-                self.wx, self.wy,
+                self.scx,
+                self.scy,
+                self.wx,
+                self.wy,
                 self.vram.iter().filter(|&&b| b != 0).count(),
-                self.oam.chunks(4).filter(|sprite| sprite[0] != 0 || sprite[1] != 0).count()
+                self.oam
+                    .chunks(4)
+                    .filter(|sprite| sprite[0] != 0 || sprite[1] != 0)
+                    .count()
             )
         } else {
             String::new()
@@ -411,5 +333,228 @@ impl PPU {
         }
 
         tile_data
+    }
+
+    pub fn set_stat(&mut self, value: u8) {
+        // 只允許寫入高 5 位，保留當前模式和 LYC=LY 標誌
+        self.stat = (value & 0xF8) | (self.stat & 0x07);
+    }
+
+    pub fn get_stat(&self) -> u8 {
+        self.stat
+    }
+
+    pub fn set_lyc(&mut self, value: u8) {
+        self.lyc = value;
+    }
+
+    pub fn get_ly(&self) -> u8 {
+        self.ly
+    }
+
+    pub fn get_lyc(&self) -> u8 {
+        self.lyc
+    }
+
+    fn scan_oam(&mut self) {
+        // OAM掃描階段，蒐集當前掃描線上可見的精靈
+        let mut visible_sprites = Vec::with_capacity(10);
+
+        for i in 0..40 {
+            let base = i * 4;
+            let y_pos = self.oam[base] as i16 - 16;
+            let x_pos = self.oam[base + 1] as i16 - 8;
+            let sprite_size = if (self.lcdc & 0x04) != 0 { 16 } else { 8 };
+
+            // 檢查精靈是否在當前掃描線上
+            if (y_pos <= self.ly as i16) && ((y_pos + sprite_size) > self.ly as i16) {
+                if visible_sprites.len() < 10 {
+                    visible_sprites.push(i);
+                }
+            }
+        }
+    }
+
+    fn render_scanline(&mut self) {
+        // 背景渲染
+        if (self.lcdc & 0x01) != 0 {
+            self.render_background();
+        }
+
+        // 窗口渲染
+        if (self.lcdc & 0x20) != 0 {
+            self.render_window();
+        }
+
+        // 精靈渲染
+        if (self.lcdc & 0x02) != 0 {
+            self.render_sprites();
+        }
+    }
+
+    fn render_background(&mut self) {
+        let bg_tile_map = if (self.lcdc & 0x08) != 0 {
+            0x1C00
+        } else {
+            0x1800
+        };
+        let tile_data = if (self.lcdc & 0x10) != 0 {
+            0x0000
+        } else {
+            0x1000
+        };
+
+        let y_pos = (self.ly as u16 + self.scy as u16) & 0xFF;
+        let tile_y = (y_pos / 8) as usize;
+
+        for x in 0..160 {
+            let x_pos = (x as u16 + self.scx as u16) & 0xFF;
+            let tile_x = (x_pos / 8) as usize;
+            let tile_index = self.vram[bg_tile_map + tile_y * 32 + tile_x];
+
+            let tile_addr = if (self.lcdc & 0x10) != 0 {
+                tile_data + (tile_index as u16 * 16)
+            } else {
+                tile_data + ((tile_index as i8 as i16 + 128) as u16 * 16)
+            };
+
+            let py = (y_pos % 8) as usize;
+            let px = (x_pos % 8) as usize;
+
+            let byte1 = self.vram[tile_addr as usize + py * 2];
+            let byte2 = self.vram[tile_addr as usize + py * 2 + 1];
+
+            let color_bit = 7 - px;
+            let color_num = ((byte2 >> color_bit) & 1) << 1 | ((byte1 >> color_bit) & 1);
+            let color = match (self.bgp >> (color_num * 2)) & 0x03 {
+                0 => 0xFFFFFFFF, // White
+                1 => 0xFFAAAAAA, // Light gray
+                2 => 0xFF555555, // Dark gray
+                3 => 0xFF000000, // Black
+                _ => unreachable!(),
+            };
+
+            let fb_index = (self.ly as usize * 160 + x) as usize;
+            self.framebuffer[fb_index] = color;
+        }
+    }
+
+    fn render_window(&mut self) {
+        if self.wy > self.ly || self.wx > 166 {
+            return;
+        }
+
+        let win_tile_map = if (self.lcdc & 0x40) != 0 {
+            0x1C00
+        } else {
+            0x1800
+        };
+        let tile_data = if (self.lcdc & 0x10) != 0 {
+            0x0000
+        } else {
+            0x1000
+        };
+
+        let win_y = self.ly as i16 - self.wy as i16;
+        if win_y < 0 {
+            return;
+        }
+
+        let tile_y = (win_y as u16 / 8) as usize;
+
+        for x in 0..160 {
+            let win_x = x as i16 - (self.wx as i16 - 7);
+            if win_x < 0 {
+                continue;
+            }
+
+            let tile_x = (win_x as u16 / 8) as usize;
+            let tile_index = self.vram[win_tile_map + tile_y * 32 + tile_x];
+
+            let tile_addr = if (self.lcdc & 0x10) != 0 {
+                tile_data + (tile_index as u16 * 16)
+            } else {
+                tile_data + ((tile_index as i8 as i16 + 128) as u16 * 16)
+            };
+
+            let py = (win_y % 8) as usize;
+            let px = (win_x % 8) as usize;
+
+            let byte1 = self.vram[tile_addr as usize + py * 2];
+            let byte2 = self.vram[tile_addr as usize + py * 2 + 1];
+
+            let color_bit = 7 - px;
+            let color_num = ((byte2 >> color_bit) & 1) << 1 | ((byte1 >> color_bit) & 1);
+            let color = match (self.bgp >> (color_num * 2)) & 0x03 {
+                0 => 0xFFFFFFFF,
+                1 => 0xFFAAAAAA,
+                2 => 0xFF555555,
+                3 => 0xFF000000,
+                _ => unreachable!(),
+            };
+
+            let fb_index = (self.ly as usize * 160 + x) as usize;
+            self.framebuffer[fb_index] = color;
+        }
+    }
+
+    fn render_sprites(&mut self) {
+        let sprite_size = if (self.lcdc & 0x04) != 0 { 16 } else { 8 };
+
+        for i in (0..40).rev() {
+            let base = i * 4;
+            let y_pos = self.oam[base] as i16 - 16;
+            let x_pos = self.oam[base + 1] as i16 - 8;
+            let tile_num = self.oam[base + 2];
+            let attributes = self.oam[base + 3];
+
+            if y_pos > self.ly as i16 || y_pos + sprite_size <= self.ly as i16 {
+                continue;
+            }
+
+            let use_obp1 = (attributes & 0x10) != 0;
+            let x_flip = (attributes & 0x20) != 0;
+            let y_flip = (attributes & 0x40) != 0;
+            let priority = (attributes & 0x80) != 0;
+
+            let palette = if use_obp1 { self.obp1 } else { self.obp0 };
+
+            let mut tile_y = self.ly as i16 - y_pos;
+            if y_flip {
+                tile_y = (sprite_size - 1) - tile_y;
+            }
+
+            let tile_addr = (tile_num as u16 * 16 + (tile_y as u16 * 2)) as usize;
+            let byte1 = self.vram[tile_addr];
+            let byte2 = self.vram[tile_addr + 1];
+
+            for x in 0..8 {
+                let screen_x = x_pos + x;
+                if screen_x < 0 || screen_x >= 160 {
+                    continue;
+                }
+
+                let bit = if x_flip { x } else { 7 - x };
+                let color_num = ((byte2 >> bit) & 1) << 1 | ((byte1 >> bit) & 1);
+
+                if color_num == 0 {
+                    continue; // 透明色
+                }
+
+                let color = match (palette >> (color_num * 2)) & 0x03 {
+                    0 => 0xFFFFFFFF,
+                    1 => 0xFFAAAAAA,
+                    2 => 0xFF555555,
+                    3 => 0xFF000000,
+                    _ => unreachable!(),
+                };
+
+                let fb_index = (self.ly as usize * 160 + screen_x as usize) as usize;
+
+                if !priority || self.framebuffer[fb_index] == 0xFFFFFFFF {
+                    self.framebuffer[fb_index] = color;
+                }
+            }
+        }
     }
 }
