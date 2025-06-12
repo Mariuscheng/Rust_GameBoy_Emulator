@@ -1,24 +1,84 @@
 use crate::mmu::MMU;
 
+/// PPU (像素處理單元)負責 Game Boy 的圖形渲染
 pub struct PPU {
-    pub vram: [u8; 0x2000],                  // 8KB VRAM
-    framebuffer: Vec<u32>,                   // 160x144 畫面
-    pub bgp: u8,                             // 背景調色板
-    pub obp0: u8,                            // sprite palette 0
-    pub obp1: u8,                            // sprite palette 1
-    pub scx: u8,                             // 背景水平滾动
-    pub scy: u8,                             // 背景垂直滾动
-    pub wx: u8,                              // Window X
-    pub wy: u8,                              // Window Y
-    pub oam: [u8; 160],                      // 40 sprites * 4 bytes
-    pub lcdc: u8,                            // LCD 控制寄存器
-    pub last_frame_time: std::time::Instant, // 上一幀的時間
-    pub fps_counter: u32,                    // FPS 計數器
-    pub mode: u8,                            // PPU 模式 (0-3)
-    pub ly: u8,                              // 當前掃描線 (LY)
-    pub lyc: u8,                             // LY 比較值 (LYC)
-    pub stat: u8,                            // STAT 寄存器
-    pub dots: u32,                           // 點時鐘計數器
+    /// 8KB 影像記憶體,用於儲存圖塊數據和背景地圖
+    pub vram: [u8; 0x2000],
+
+    /// 160x144 畫面緩衝區
+    framebuffer: Vec<u32>,
+
+    /// FF47 - BGP - 背景調色板數據
+    /// 位元 7-6: 顏色 3 (11: 黑, 10: 深灰, 01: 淺灰, 00: 白)
+    /// 位元 5-4: 顏色 2
+    /// 位元 3-2: 顏色 1
+    /// 位元 1-0: 顏色 0
+    pub bgp: u8,
+
+    /// FF48 - OBP0 - 物件調色板 0 數據
+    /// 同 BGP 格式但位元 1-0 透明
+    pub obp0: u8,
+
+    /// FF49 - OBP1 - 物件調色板 1 數據
+    /// 同 BGP 格式但位元 1-0 透明
+    pub obp1: u8,
+
+    /// FF43 - SCX - 背景水平捲動位置 (0-255)
+    pub scx: u8,
+
+    /// FF42 - SCY - 背景垂直捲動位置 (0-255)
+    pub scy: u8,
+
+    /// FF4B - WX - 視窗 X 位置減 7 (0-166)
+    pub wx: u8,
+
+    /// FF4A - WY - 視窗 Y 位置 (0-143)
+    pub wy: u8,
+
+    /// FF40 - LCDC - LCD 控制寄存器
+    /// 位元 7: LCD 顯示開啟
+    /// 位元 6: 視窗瓦片地圖選擇
+    /// 位元 5: 視窗顯示開啟
+    /// 位元 4: 背景/視窗瓦片數據選擇
+    /// 位元 3: 背景瓦片地圖選擇
+    /// 位元 2: 物件(Sprite)大小
+    /// 位元 1: 物件顯示開啟
+    /// 位元 0: 背景顯示開啟
+    pub lcdc: u8,
+
+    /// 用於 FPS 計算的時間點
+    pub last_frame_time: std::time::Instant,
+
+    /// FPS 計數器
+    pub fps_counter: u32,
+
+    /// 目前 PPU 模式 (0-3)
+    /// 0: H-Blank
+    /// 1: V-Blank
+    /// 2: OAM Scan
+    /// 3: Drawing
+    pub mode: u8,
+
+    /// FF44 - LY - 目前掃描線 (0-153)
+    pub ly: u8,
+
+    /// FF45 - LYC - 掃描線比較值
+    pub lyc: u8,
+
+    /// FF41 - STAT - LCD 狀態寄存器
+    /// 位元 6: LYC=LY 中斷開啟
+    /// 位元 5: Mode 2 中斷開啟
+    /// 位元 4: Mode 1 中斷開啟
+    /// 位元 3: Mode 0 中斷開啟
+    /// 位元 2: LYC=LY 標誌
+    /// 位元 1-0: 目前模式
+    pub stat: u8,
+
+    /// 點時鐘計數器
+    pub dots: u32,
+
+    /// Sprite 屬性表 (40個物件 * 4位元組)
+    pub oam: [u8; 160],
 }
 
 impl PPU {
@@ -61,11 +121,19 @@ impl PPU {
         self.scy = value;
     }
     pub fn set_wx(&mut self, value: u8) {
+        // 在 Game Boy 上，WX 超出範圍的值會被正常設置，
+        // 但窗口只有在有效範圍時才會被繪製
+        // 完全保存原始值以更準確地模擬硬體行為
         self.wx = value;
     }
+
     pub fn set_wy(&mut self, value: u8) {
+        // 在 Game Boy 上，WY 超出範圍的值會被正常設置，
+        // 但窗口只有在有效範圍時才會被繪製
+        // 完全保存原始值以更準確地模擬硬體行為
         self.wy = value;
     }
+
     pub fn set_lcdc(&mut self, value: u8) {
         self.lcdc = value;
     }
@@ -104,29 +172,33 @@ impl PPU {
         }
     }
 
+    /// 記錄 PPU 狀態變更
+    fn log_state_change(&self, old_mode: u8, new_mode: u8) {
+        println!(
+            "PPU Mode Change: {} -> {} at LY={}",
+            match old_mode {
+                0 => "HBlank",
+                1 => "VBlank",
+                2 => "OAM Scan",
+                3 => "Drawing",
+                _ => "Unknown",
+            },
+            match new_mode {
+                0 => "HBlank",
+                1 => "VBlank",
+                2 => "OAM Scan",
+                3 => "Drawing",
+                _ => "Unknown",
+            },
+            self.ly
+        );
+    }
+
+    /// PPU 模式更新
     fn update_mode(&mut self, mmu: &mut crate::mmu::MMU) {
-        // 更新點時鐘
-        self.dots += 1;
-
-        // 一條掃描線總共需要456個點時鐘
-        if self.dots >= 456 {
-            self.dots = 0;
-            self.ly = (self.ly + 1) % 154;
-
-            // 檢查 LY=LYC 中斷
-            if self.ly == self.lyc {
-                self.stat |= 0x04; // 設置巧合標誌
-                if (self.stat & 0x40) != 0 {
-                    mmu.if_reg |= 0x02; // 觸發STAT中斷
-                }
-            } else {
-                self.stat &= !0x04; // 清除巧合標誌
-            }
-        }
-
         let old_mode = self.mode;
 
-        // 更新PPU模式
+        // 更新 PPU 模式
         self.mode = if self.ly >= 144 {
             1 // V-Blank
         } else {
@@ -139,7 +211,12 @@ impl PPU {
             }
         };
 
-        // 更新STAT寄存器的模式位
+        // 如果模式發生變化,記錄並通知
+        if old_mode != self.mode {
+            self.log_state_change(old_mode, self.mode);
+        }
+
+        // 更新 STAT 寄存器的模式位
         self.stat = (self.stat & 0xFC) | self.mode;
 
         // 檢查模式變更中斷
@@ -153,13 +230,13 @@ impl PPU {
                 }
                 1 => {
                     // V-Blank
-                    mmu.if_reg |= 0x01; // 觸發V-Blank中斷
+                    mmu.if_reg |= 0x01;
                     if (self.stat & 0x10) != 0 {
                         mmu.if_reg |= 0x02;
                     }
                 }
                 2 => {
-                    // OAM
+                    // OAM Scan
                     if (self.stat & 0x20) != 0 {
                         mmu.if_reg |= 0x02;
                     }
@@ -336,10 +413,11 @@ impl PPU {
     }
 
     pub fn set_stat(&mut self, value: u8) {
-        // 只允許寫入高 5 位，保留當前模式和 LYC=LY 標誌
-        self.stat = (value & 0xF8) | (self.stat & 0x07);
+        // 保護位 0-2,只允許設置位 3-7
+        let protected_bits = self.stat & 0x07;
+        let new_value = (value & 0xF8) | protected_bits;
+        self.stat = new_value;
     }
-
     pub fn get_stat(&self) -> u8 {
         self.stat
     }
@@ -354,6 +432,43 @@ impl PPU {
 
     pub fn get_lyc(&self) -> u8 {
         self.lyc
+    }
+
+    pub fn get_lcdc(&self) -> u8 {
+        self.lcdc
+    }
+
+    pub fn get_bgp(&self) -> u8 {
+        self.bgp
+    }
+
+    pub fn get_obp0(&self) -> u8 {
+        self.obp0
+    }
+
+    pub fn get_obp1(&self) -> u8 {
+        self.obp1
+    }
+
+    pub fn get_scx(&self) -> u8 {
+        self.scx
+    }
+
+    pub fn get_scy(&self) -> u8 {
+        self.scy
+    }
+
+    pub fn get_wx(&self) -> u8 {
+        self.wx
+    }
+
+    pub fn get_wy(&self) -> u8 {
+        self.wy
+    }
+
+    /// 獲取當前 PPU 模式
+    pub fn get_mode(&self) -> u8 {
+        self.mode
     }
 
     fn scan_oam(&mut self) {
@@ -438,8 +553,9 @@ impl PPU {
             self.framebuffer[fb_index] = color;
         }
     }
-
     fn render_window(&mut self) {
+        // 只有在 WY <= LY 且 WX <= 166 時才渲染窗口
+        // 這遵循 Game Boy 硬體的行為，無需警告信息
         if self.wy > self.ly || self.wx > 166 {
             return;
         }
@@ -556,5 +672,45 @@ impl PPU {
                 }
             }
         }
+    }
+
+    /// 統一的寄存器讀取介面
+    pub fn read_register(&self, addr: u16) -> u8 {
+        match addr {
+            0xFF40 => self.lcdc,
+            0xFF41 => self.stat,
+            0xFF42 => self.scy,
+            0xFF43 => self.scx,
+            0xFF44 => self.ly,
+            0xFF45 => self.lyc,
+            0xFF47 => self.bgp,
+            0xFF48 => self.obp0,
+            0xFF49 => self.obp1,
+            0xFF4A => self.wy,
+            0xFF4B => self.wx,
+            _ => 0xFF,
+        }
+    }
+
+    /// 統一的寄存器寫入介面
+    pub fn write_register(&mut self, addr: u16, value: u8) {
+        match addr {
+            0xFF40 => self.set_lcdc(value),
+            0xFF41 => self.set_stat(value),
+            0xFF42 => self.set_scy(value),
+            0xFF43 => self.set_scx(value),
+            0xFF45 => self.set_lyc(value),
+            0xFF47 => self.set_bgp(value),
+            0xFF48 => self.set_obp0(value),
+            0xFF49 => self.set_obp1(value),
+            0xFF4A => self.set_wy(value),
+            0xFF4B => self.set_wx(value),
+            _ => {}
+        }
+    }
+
+    /// 清空畫面,用於 LCD 關閉時
+    pub fn clear_screen(&mut self) {
+        self.framebuffer.fill(0xFF666666u32); // 填充灰色
     }
 }

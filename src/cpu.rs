@@ -283,6 +283,58 @@ impl CPU {
 
                 4
             }
+            0x07 => {
+                // RLCA - 累加器向左旋轉
+                let carry = (self.registers.a & 0x80) >> 7; // 取得最高位
+                self.registers.a = (self.registers.a << 1) | carry; // 左移並將原最高位放到最低位
+
+                self.registers.set_z_flag(false);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag(false);
+                self.registers.set_c_flag(carry == 1);
+
+                4
+            }
+            0x08 => {
+                // LD (nn), SP - 將 SP 值存入指定記憶體位置
+                let low = self.fetch();
+                let high = self.fetch();
+                let addr = ((high as u16) << 8) | (low as u16);
+
+                // 將 SP 的低 8 位存入 addr
+                self.mmu.write_byte(addr, (self.registers.sp & 0xFF) as u8);
+                // 將 SP 的高 8 位存入 addr+1
+                self.mmu
+                    .write_byte(addr + 1, (self.registers.sp >> 8) as u8);
+
+                20 // 需要 5 個機器週期
+            }
+            0x17 => {
+                // RLA - 透過進位旗標向左旋轉累加器
+                let old_carry = if self.registers.get_c_flag() { 1 } else { 0 };
+                let new_carry = (self.registers.a & 0x80) >> 7;
+                self.registers.a = (self.registers.a << 1) | old_carry;
+
+                self.registers.set_z_flag(false);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag(false);
+                self.registers.set_c_flag(new_carry == 1);
+
+                4
+            }
+            0x1F => {
+                // RRA - 透過進位旗標向右旋轉累加器
+                let old_carry = if self.registers.get_c_flag() { 1 } else { 0 };
+                let new_carry = self.registers.a & 0x01;
+                self.registers.a = (self.registers.a >> 1) | (old_carry << 7);
+
+                self.registers.set_z_flag(false);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag(false);
+                self.registers.set_c_flag(new_carry == 1);
+
+                4
+            }
             0xE0 => {
                 // LDH (a8),A
                 let offset = self.fetch();
@@ -338,6 +390,22 @@ impl CPU {
                 // LD A, n
                 let n = self.fetch();
                 self.registers.a = n;
+                8
+            }
+            0x32 => {
+                // LD (HL-), A - 將A存入HL指向的地址，然後HL減一
+                let addr = self.registers.get_hl();
+                self.mmu.write_byte(addr, self.registers.a);
+
+                // HL--
+                let hl = self.registers.get_hl().wrapping_sub(1);
+                self.registers.set_hl(hl);
+
+                8
+            }
+            0x33 => {
+                // INC SP - 堆疊指針加一
+                self.registers.sp = self.registers.sp.wrapping_add(1);
                 8
             }
             0x36 => {
@@ -474,6 +542,34 @@ impl CPU {
                 self.registers.set_hl((hi as u16) << 8 | lo as u16);
                 12
             }
+            0x22 => {
+                // LD (HL+), A - 將 A 存入 HL 指向的地址，然後 HL 加一
+                let addr = self.registers.get_hl();
+                self.mmu.write_byte(addr, self.registers.a);
+
+                // HL++
+                let hl = self.registers.get_hl().wrapping_add(1);
+                self.registers.set_hl(hl);
+
+                8
+            }
+            0x23 => {
+                // INC HL - HL 寄存器對加一
+                let hl = self.registers.get_hl().wrapping_add(1);
+                self.registers.set_hl(hl);
+                8
+            }
+            0x2A => {
+                // LD A, (HL+) - 讀取 HL 指向的地址到 A，然後 HL 加一
+                let addr = self.registers.get_hl();
+                self.registers.a = self.mmu.read_byte(addr);
+
+                // HL++
+                let hl = self.registers.get_hl().wrapping_add(1);
+                self.registers.set_hl(hl);
+
+                8
+            }
             0x31 => {
                 // LD SP, nn
                 let lo = self.fetch();
@@ -489,6 +585,30 @@ impl CPU {
                 self.registers.set_z_flag(self.registers.b == 0);
                 self.registers.set_n_flag(false);
                 self.registers.set_h_flag((self.registers.b & 0x0F) == 0);
+                4
+            }
+            0x05 => {
+                // DEC B - B寄存器減一
+                self.registers.b = self.registers.b.wrapping_sub(1);
+                self.registers.set_z_flag(self.registers.b == 0);
+                self.registers.set_n_flag(true);
+                self.registers.set_h_flag((self.registers.b & 0x0F) == 0x0F);
+                4
+            }
+            0x0C => {
+                // INC C
+                self.registers.c = self.registers.c.wrapping_add(1);
+                self.registers.set_z_flag(self.registers.c == 0);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag((self.registers.c & 0x0F) == 0);
+                4
+            }
+            0x0D => {
+                // DEC C - C寄存器減一
+                self.registers.c = self.registers.c.wrapping_sub(1);
+                self.registers.set_z_flag(self.registers.c == 0);
+                self.registers.set_n_flag(true);
+                self.registers.set_h_flag((self.registers.c & 0x0F) == 0x0F);
                 4
             }
             0x3C => {
@@ -616,6 +736,26 @@ impl CPU {
 
                 if reg_num == 6 { 8 } else { 4 }
             }
+            0xFE => {
+                // CP n - Compare A with immediate value
+                let n = self.fetch();
+                let result = self.registers.a.wrapping_sub(n);
+
+                self.registers.set_z_flag(result == 0);
+                self.registers.set_n_flag(true);
+                self.registers
+                    .set_h_flag((self.registers.a & 0x0F) < (n & 0x0F));
+                self.registers.set_c_flag(self.registers.a < n);
+
+                8 // 2 機器週期
+            }
+            0x2F => {
+                // CPL - 累加器取補碼 (NOT A)
+                self.registers.a = !self.registers.a; // 全部位元取反
+                self.registers.set_n_flag(true);
+                self.registers.set_h_flag(true);
+                4
+            }
             0x27 => {
                 // DAA - 十進制調整累加器 (用於 BCD 算術後的調整)
                 let mut a = self.registers.a;
@@ -647,15 +787,71 @@ impl CPU {
                 self.registers.set_h_flag(false);
                 // C 標誌在加法時已更新,減法時保持不變
                 4
-            }
-
-            // === 跳轉指令 ===
+            } // === 16 位元算術和跳轉指令 ===
             0x00 => 4, // NOP
+            0x03 => {
+                // INC BC - BC 寄存器對加一
+                let bc = self.registers.get_bc().wrapping_add(1);
+                self.registers.set_bc(bc);
+                8
+            }
+            0x09 => {
+                // ADD HL, BC - HL 加上 BC
+                let hl = self.registers.get_hl();
+                let bc = self.registers.get_bc();
+                let result = hl.wrapping_add(bc);
+
+                // 不影響零標誌
+                self.registers.set_n_flag(false);
+                // 半進位：檢查第11位的進位（相當於16位數的低位8位的進位）
+                self.registers
+                    .set_h_flag((hl & 0xFFF) + (bc & 0xFFF) > 0xFFF);
+                // 進位：檢查結果是否溢出16位
+                self.registers.set_c_flag(hl > 0xFFFF - bc);
+
+                self.registers.set_hl(result);
+                8
+            }
+            0x0B => {
+                // DEC BC - BC 寄存器對減一
+                let bc = self.registers.get_bc().wrapping_sub(1);
+                self.registers.set_bc(bc);
+                8
+            }
+            0x13 => {
+                // INC DE - DE 寄存器對加一
+                let de = self.registers.get_de().wrapping_add(1);
+                self.registers.set_de(de);
+                8
+            }
             0x18 => {
                 // JR n
                 let offset = self.fetch() as i8;
                 self.registers.pc = ((self.registers.pc as i32) + (offset as i32)) as u16;
                 12
+            }
+            0x19 => {
+                // ADD HL, DE - HL 加上 DE
+                let hl = self.registers.get_hl();
+                let de = self.registers.get_de();
+                let result = hl.wrapping_add(de);
+
+                // 不影響零標誌
+                self.registers.set_n_flag(false);
+                // 半進位：檢查第11位的進位（相當於16位數的低位8位的進位）
+                self.registers
+                    .set_h_flag((hl & 0xFFF) + (de & 0xFFF) > 0xFFF);
+                // 進位：檢查結果是否溢出16位
+                self.registers.set_c_flag(hl > 0xFFFF - de);
+
+                self.registers.set_hl(result);
+                8
+            }
+            0x1B => {
+                // DEC DE - DE 寄存器對減一
+                let de = self.registers.get_de().wrapping_sub(1);
+                self.registers.set_de(de);
+                8
             }
             0x20 => {
                 // JR NZ, n
@@ -677,12 +873,81 @@ impl CPU {
                     8
                 }
             }
+            0x30 => {
+                // JR NC, n - 如果進位標誌為 0 則跳轉
+                let offset = self.fetch() as i8;
+                if !self.registers.get_c_flag() {
+                    self.registers.pc = ((self.registers.pc as i32) + (offset as i32)) as u16;
+                    12
+                } else {
+                    8
+                }
+            }
+            0x38 => {
+                // JR C, n - 如果進位標誌為 1 則跳轉
+                let offset = self.fetch() as i8;
+                if self.registers.get_c_flag() {
+                    self.registers.pc = ((self.registers.pc as i32) + (offset as i32)) as u16;
+                    12
+                } else {
+                    8
+                }
+            }
+            0x29 => {
+                // ADD HL, HL - HL 加上 HL
+                let hl = self.registers.get_hl();
+                let result = hl.wrapping_add(hl);
+
+                // 不影響零標誌
+                self.registers.set_n_flag(false);
+                // 半進位：檢查第11位的進位
+                self.registers
+                    .set_h_flag((hl & 0xFFF) + (hl & 0xFFF) > 0xFFF);
+                // 進位：檢查結果是否溢出16位
+                self.registers.set_c_flag(hl > 0x7FFF); // 0xFFFF/2
+
+                self.registers.set_hl(result);
+                8
+            }
+            0x2B => {
+                // DEC HL - HL 寄存器對減一
+                let hl = self.registers.get_hl().wrapping_sub(1);
+                self.registers.set_hl(hl);
+                8
+            }
+            0x39 => {
+                // ADD HL, SP - HL 加上 SP
+                let hl = self.registers.get_hl();
+                let sp = self.registers.sp;
+                let result = hl.wrapping_add(sp);
+
+                // 不影響零標誌
+                self.registers.set_n_flag(false);
+                // 半進位：檢查第11位的進位
+                self.registers
+                    .set_h_flag((hl & 0xFFF) + (sp & 0xFFF) > 0xFFF);
+                // 進位：檢查結果是否溢出16位
+                self.registers.set_c_flag(hl > 0xFFFF - sp);
+
+                self.registers.set_hl(result);
+                8
+            }
+            0x3B => {
+                // DEC SP - 堆疊指針減一
+                self.registers.sp = self.registers.sp.wrapping_sub(1);
+                8
+            }
             0xC3 => {
                 // JP nn
                 let lo = self.fetch() as u16;
                 let hi = self.fetch() as u16;
                 self.registers.pc = (hi << 8) | lo;
                 16
+            }
+            0xE9 => {
+                // JP HL - 將程序計數器設為 HL
+                self.registers.pc = self.registers.get_hl();
+                4
             }
 
             // === CPU 控制指令 ===
@@ -776,6 +1041,54 @@ impl CPU {
                 self.registers.pc = self.pop_stack();
                 16
             }
+            0xCD => {
+                // CALL nn - 呼叫子程序
+                let low = self.fetch();
+                let high = self.fetch();
+                let address = ((high as u16) << 8) | (low as u16);
+
+                // 將下一條指令的地址（PC）壓入堆疊
+                self.push_stack(self.registers.pc);
+
+                // 跳轉到目標地址
+                self.registers.pc = address;
+
+                24 // 需要 24 個 T-states (6 機器週期)
+            }
+            0xC4 => {
+                // CALL NZ, nn - 如果 Z 標誌為 0（非零）則調用
+                let low = self.fetch();
+                let high = self.fetch();
+                let address = ((high as u16) << 8) | (low as u16);
+
+                if !self.registers.get_z_flag() {
+                    // 將下一條指令的地址（PC）壓入堆疊
+                    self.push_stack(self.registers.pc);
+
+                    // 跳轉到目標地址
+                    self.registers.pc = address;
+                    24 // 條件成立時需要 24 個 T-states
+                } else {
+                    12 // 條件不成立時只需要 12 個 T-states
+                }
+            }
+            0xCC => {
+                // CALL Z, nn - 如果 Z 標誌為 1（零）則調用
+                let low = self.fetch();
+                let high = self.fetch();
+                let address = ((high as u16) << 8) | (low as u16);
+
+                if self.registers.get_z_flag() {
+                    // 將下一條指令的地址（PC）壓入堆疊
+                    self.push_stack(self.registers.pc);
+
+                    // 跳轉到目標地址
+                    self.registers.pc = address;
+                    24 // 條件成立時需要 24 個 T-states
+                } else {
+                    12 // 條件不成立時只需要 12 個 T-states
+                }
+            }
             0xC0 => {
                 // RET NZ
                 if !self.registers.get_z_flag() {
@@ -783,6 +1096,40 @@ impl CPU {
                     20
                 } else {
                     8
+                }
+            }
+            0xD4 => {
+                // CALL NC, nn - 如果 C 標誌為 0（無進位）則調用
+                let low = self.fetch();
+                let high = self.fetch();
+                let address = ((high as u16) << 8) | (low as u16);
+
+                if !self.registers.get_c_flag() {
+                    // 將下一條指令的地址（PC）壓入堆疊
+                    self.push_stack(self.registers.pc);
+
+                    // 跳轉到目標地址
+                    self.registers.pc = address;
+                    24 // 條件成立時需要 24 個 T-states
+                } else {
+                    12 // 條件不成立時只需要 12 個 T-states
+                }
+            }
+            0xDC => {
+                // CALL C, nn - 如果 C 標誌為 1（有進位）則調用
+                let low = self.fetch();
+                let high = self.fetch();
+                let address = ((high as u16) << 8) | (low as u16);
+
+                if self.registers.get_c_flag() {
+                    // 將下一條指令的地址（PC）壓入堆疊
+                    self.push_stack(self.registers.pc);
+
+                    // 跳轉到目標地址
+                    self.registers.pc = address;
+                    24 // 條件成立時需要 24 個 T-states
+                } else {
+                    12 // 條件不成立時只需要 12 個 T-states
                 }
             }
             0xC8 => {
@@ -854,20 +1201,26 @@ impl CPU {
                 self.registers.pc = 0x0030;
                 16
             }
+            0xF9 => {
+                // LD SP, HL - 將 HL 的值加載到 SP
+                self.registers.sp = self.registers.get_hl();
+                8
+            }
             0xFF => {
                 // RST 38H
                 self.push_stack(self.registers.pc);
                 self.registers.pc = 0x0038;
                 16
             }
-
             // 默認處理
             _ => {
                 println!(
-                    "警告: 未實現的指令 0x{:02X} at PC: 0x{:04X}",
+                    "警告: 未實現的指令 0x{:02X} at PC: 0x{:04X}，將嘗試繼續執行",
                     opcode,
                     self.registers.pc - 1
                 );
+                // 針對未實現的指令，記錄到日誌但讓程序繼續運行
+                self.registers.pc += 1; // 跳過這個未知的指令
                 4 // 默認 1 機器週期
             }
         }
@@ -940,7 +1293,7 @@ impl CPU {
                 if reg == 6 { 16 } else { 8 }
             }
 
-            // SLA/SRA/SRL r - 移位指令
+            // SLA/SWAP/SRA/SRL r - 移位指令
             0x20..=0x27 => {
                 // SLA r
                 let reg = opcode & 0x07;
@@ -952,6 +1305,22 @@ impl CPU {
                 self.registers.set_n_flag(false);
                 self.registers.set_h_flag(false);
                 self.registers.set_c_flag(carry);
+
+                self.set_register_8bit(reg, result);
+                if reg == 6 { 16 } else { 8 }
+            }
+            0x30..=0x37 => {
+                // SWAP r - 交換高低4位
+                let reg = opcode & 0x07;
+                let value = self.get_register_8bit(reg);
+                let hi = value & 0xF0;
+                let lo = value & 0x0F;
+                let result = (lo << 4) | (hi >> 4);
+
+                self.registers.set_z_flag(result == 0);
+                self.registers.set_n_flag(false);
+                self.registers.set_h_flag(false);
+                self.registers.set_c_flag(false);
 
                 self.set_register_8bit(reg, result);
                 if reg == 6 { 16 } else { 8 }

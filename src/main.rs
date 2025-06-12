@@ -6,6 +6,7 @@ use minifb::{Key, Window, WindowOptions};
 mod apu;
 mod cpu;
 mod joypad;
+mod memory_viewer;
 mod mmu;
 mod ppu;
 mod timer;
@@ -71,26 +72,32 @@ fn main() {
     let standard_palette = 0xE4;
     cpu.mmu.write_byte(0xFF47, standard_palette); // BGP
     cpu.mmu.write_byte(0xFF48, standard_palette); // OBP0
-    cpu.mmu.write_byte(0xFF49, standard_palette); // OBP1
-
-    // 主循環
+    cpu.mmu.write_byte(0xFF49, standard_palette); // OBP1    // 主循環
     let mut frame_count = 0;
     let mut last_time = std::time::Instant::now();
+    let mut cpu_cycles = 0;
     println!("🚀 開始模擬循環...");
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         // 處理輸入
-        handle_input(&mut window, &mut joypad, &mut cpu);
+        handle_input(&mut window, &mut joypad, &mut cpu); // CPU 執行
+        while cpu_cycles < 70224 {
+            // 一幀需要的CPU週期數
+            let cycles = cpu.step();
+            cpu_cycles += cycles as u32;
 
-        // CPU 執行
-        for _ in 0..1000 {
-            cpu.step();
+            // 執行 MMU 步進（處理 DMA 等其他硬體元件）
+            cpu.mmu.step();
+
+            // 更新 PPU
+            if cpu_cycles % 456 == 0 {
+                // 每條掃描線更新一次
+                update_ppu(&mut ppu, &mut cpu);
+            }
         }
+        cpu_cycles = 0;
 
-        // 更新 PPU
-        update_ppu(&mut ppu, &mut cpu);
-
-        // 更新顯示
+        // 更新顯示緩衝區
         if window
             .update_with_buffer(ppu.get_framebuffer(), 160, 144)
             .is_ok()
@@ -98,8 +105,17 @@ fn main() {
             if frame_count % 60 == 0 {
                 let elapsed = last_time.elapsed();
                 let fps = 60.0 / elapsed.as_secs_f32();
-                last_time = std::time::Instant::now();
+                last_time = std::time::Instant::now(); // 更新視窗標題
                 window.set_title(&format!("Game Boy 模擬器 - {:.1} FPS - {}", fps, rom_file));
+
+                // 每60幀輸出一次狀態資訊
+                println!(
+                    "📊 狀態: {:.1} FPS | Mode: {} | LY: {} | LCDC: {:02X}",
+                    fps,
+                    ppu.get_mode(),
+                    ppu.get_ly(),
+                    ppu.get_lcdc()
+                );
             }
         }
 
@@ -187,12 +203,21 @@ fn handle_input(window: &mut Window, joypad: &mut Joypad, cpu: &mut CPU) {
 }
 
 fn update_ppu(ppu: &mut PPU, cpu: &mut CPU) {
+    // 檢查 LCD 控制器狀態
+    let lcdc = cpu.mmu.read_byte(0xFF40);
+    if (lcdc & 0x80) == 0 {
+        // LCD 關閉時清空畫面
+        ppu.clear_screen();
+        return;
+    }
+
     // 同步 VRAM 到 PPU
     let vram_data = cpu.mmu.vram();
     ppu.vram.copy_from_slice(&vram_data);
 
     // 更新 PPU 狀態
     ppu.set_oam(cpu.mmu.oam());
+    ppu.set_stat(cpu.mmu.read_byte(0xFF41));
     ppu.set_bgp(cpu.mmu.read_byte(0xFF47));
     ppu.set_obp0(cpu.mmu.read_byte(0xFF48));
     ppu.set_obp1(cpu.mmu.read_byte(0xFF49));
@@ -200,7 +225,8 @@ fn update_ppu(ppu: &mut PPU, cpu: &mut CPU) {
     ppu.set_scy(cpu.mmu.read_byte(0xFF42));
     ppu.set_wx(cpu.mmu.read_byte(0xFF4B));
     ppu.set_wy(cpu.mmu.read_byte(0xFF4A));
-    ppu.set_lcdc(cpu.mmu.read_byte(0xFF40));
+    ppu.set_lcdc(lcdc);
+    ppu.set_lyc(cpu.mmu.read_byte(0xFF45));
 
     // 執行 PPU 渲染
     ppu.step(&mut cpu.mmu);
