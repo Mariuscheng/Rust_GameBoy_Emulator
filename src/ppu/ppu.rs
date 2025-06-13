@@ -144,28 +144,68 @@ impl PPU {
     pub fn set_oam(&mut self, data: [u8; 160]) {
         self.oam = data;
     }
-    pub fn step(&mut self, mmu: &mut crate::mmu::MMU) {
-        // 更新掃描線時序
-        self.update_mode(mmu);
-
+    pub fn step(&mut self, _mmu: &mut crate::mmu::MMU) {
         // 如果LCD關閉，清空畫面並返回
         if (self.lcdc & 0x80) == 0 {
             self.framebuffer.fill(0xFF666666u32);
             return;
         }
 
-        // 每1000幀執行一次VRAM診斷
-        static mut FRAME_COUNTER: u32 = 0;
+        // 每十萬點執行一次VRAM診斷 (大約每100幀)
+        static mut DOT_COUNTER: u32 = 0;
         unsafe {
-            FRAME_COUNTER += 1;
-            if FRAME_COUNTER % 1000 == 0 {
+            DOT_COUNTER += 1;
+            if DOT_COUNTER % 100000 == 0 {
                 let vram_analysis = self.check_empty_vram();
                 println!("{}", vram_analysis);
             }
         }
 
-        // 檢查 dots 計數器是否增加
+        // 更新 PPU 點計數器並管理模式轉換
         self.dots += 1;
+
+        // 一條掃描線的點數時序
+        // 0-80: OAM掃描 (模式2)
+        // 81-252: 繪製 (模式3)
+        // 253-456: H-Blank (模式0)
+
+        // 確定當前PPU模式
+        if self.ly >= 144 {
+            // V-Blank期間 (模式1)
+            if self.mode != 1 {
+                self.mode = 1;
+                self.stat = (self.stat & 0xFC) | 1; // 更新STAT寄存器
+                println!("PPU模式: V-Blank");
+            }
+        } else if self.dots <= 80 {
+            // OAM掃描期間 (模式2)
+            if self.mode != 2 {
+                self.mode = 2;
+                self.stat = (self.stat & 0xFC) | 2;
+                self.scan_oam(); // 掃描OAM
+                println!("PPU模式: OAM掃描");
+            }
+        } else if self.dots <= 252 {
+            // 繪製期間 (模式3)
+            if self.mode != 3 {
+                self.mode = 3;
+                self.stat = (self.stat & 0xFC) | 3;
+                println!("PPU模式: 繪製");
+            }
+
+            // 在像素處理模式，渲染當前掃描線
+            if self.ly < 144 {
+                self.render_scanline();
+            }
+        } else {
+            // H-Blank期間 (模式0)
+            if self.mode != 0 {
+                self.mode = 0;
+                self.stat = (self.stat & 0xFC) | 0;
+                println!("PPU模式: H-Blank");
+            }
+        }
+
         // 一條掃描線為456 dots
         if self.dots >= 456 {
             self.dots = 0;
@@ -174,12 +214,14 @@ impl PPU {
             // 檢查LY=LYC中斷
             if self.ly == self.lyc {
                 self.stat |= 0x04; // 設置LYC=LY標誌
-                if (self.stat & 0x40) != 0 {
-                    // 觸發STAT中斷 (需要添加MMU中的中斷標誌處理)
-                    println!("STAT中斷: LYC=LY");
-                }
+                println!("LYC=LY 中斷: LY={}, LYC={}", self.ly, self.lyc);
             } else {
                 self.stat &= !0x04; // 清除LYC=LY標誌
+            }
+
+            // 顯示每行掃描線的開始
+            if self.ly % 20 == 0 {
+                println!("掃描線更新: LY={}", self.ly);
             }
         }
 
@@ -536,8 +578,12 @@ impl PPU {
             }
         }
     }
-
     fn render_scanline(&mut self) {
+        // 在渲染前顯示當前掃描線狀態 (如果是第一行或每10行一次)
+        if self.ly == 0 || self.ly % 10 == 0 {
+            println!("正在渲染掃描線 {}/144", self.ly);
+        }
+
         // 背景渲染
         if (self.lcdc & 0x01) != 0 {
             self.render_background();
@@ -551,6 +597,11 @@ impl PPU {
         // 精靈渲染
         if (self.lcdc & 0x02) != 0 {
             self.render_sprites();
+        }
+
+        // 在每次渲染完一個完整的幀時(最後一行)輸出調試信息
+        if self.ly == 143 {
+            println!("完成幀渲染: LCDC={:02X}h BGP={:02X}h", self.lcdc, self.bgp);
         }
     }
     fn render_background(&mut self) {
