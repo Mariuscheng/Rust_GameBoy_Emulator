@@ -31,7 +31,7 @@ const INPUT_REGISTER: u16 = 0xFF00;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🎮 Game Boy 模擬器啟動中..."); // 載入遊戲 ROM
     println!("🎮 選擇遊戲...");
-    let rom_path = "rom/dmg_test_prog_ver1.gb"; // 選擇俄羅斯方塊作為預設遊戲
+    let rom_path = "rom/tetris.gb"; // 選擇俄羅斯方塊作為預設遊戲
     println!("💾 載入 ROM 檔案: {}", rom_path);
 
     let rom_data = fs::read(rom_path).map_err(|e| {
@@ -173,13 +173,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // 每幀執行多個 CPU 週期
                 let cycles = cpu.step();
                 timer.update(cycles);
-                scanline_cycles += cycles as u32;
-
-                // 更新 PPU 狀態
+                scanline_cycles += cycles as u32; // 更新 PPU 狀態
                 ppu.lcdc = cpu.mmu.read_byte(0xFF40);
                 ppu.scy = cpu.mmu.read_byte(0xFF42);
                 ppu.scx = cpu.mmu.read_byte(0xFF43);
                 ppu.bgp = cpu.mmu.read_byte(0xFF47);
+
+                // 同步 VRAM 數據 (每 50 個 CPU 週期一次以減少開銷)
+                static mut SYNC_COUNTER: u32 = 0;
+                unsafe {
+                    SYNC_COUNTER += 1;
+                    if SYNC_COUNTER % 50 == 0 {
+                        // 將 MMU 的 VRAM 數據複製到 PPU
+                        for i in 0x8000u16..0xA000u16 {
+                            let vram_idx = (i - 0x8000) as usize;
+                            if vram_idx < ppu.vram.len() {
+                                ppu.vram[vram_idx] = cpu.mmu.read_byte(i);
+                            }
+                        }
+                    }
+                } // PPU步進 - 每個CPU週期都要更新PPU
+                // 實際的Game Boy PPU每4個CPU時鐘更新一次，但為簡化我們每次都更新
+                ppu.step(&mut cpu.mmu);
 
                 // 掃描線更新
                 if scanline_cycles >= SCANLINE_CYCLES {
@@ -189,16 +204,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             "\n══ PPU 狀態更新 [幀數: {}] ══\n└─ LCDC={:02X}h BGP={:02X}h SCX={:02X}h SCY={:02X}h",
                             frames, ppu.lcdc, ppu.bgp, ppu.scx, ppu.scy
                         );
-                    } // 渲染掃描線並處理 VBlank
-                    if ppu.ly < 144 {
-                        // 更新PPU (將會在內部渲染當前掃描線)
-                        ppu.step(&mut cpu.mmu);
-                    } else if ppu.ly == 144 {
-                        // VBlank 開始
+                        println!(
+                            "   PPU模式: {}, LY={}, 點計數={}",
+                            match ppu.mode {
+                                0 => "H-Blank",
+                                1 => "V-Blank",
+                                2 => "OAM掃描",
+                                3 => "繪製",
+                                _ => "未知",
+                            },
+                            ppu.ly,
+                            ppu.dots
+                        );
+                    }
+                    // VBlank 檢測 - 當進入第一條VBlank掃描線(144)時處理
+                    if ppu.ly == 144 && ppu.dots <= 1 {
+                        // VBlank 開始 - 觸發中斷
                         cpu.mmu
                             .write_byte(IF_REGISTER, cpu.mmu.read_byte(IF_REGISTER) | 0x01);
 
-                        // 更新幀緩衝區
+                        // 更新幀緩衝區 - 完整幀現在已經渲染完成
                         let ppu_buffer = ppu.get_framebuffer();
                         if ppu_buffer.len() == frame_buffer.len() {
                             frame_buffer.copy_from_slice(ppu_buffer);
@@ -213,7 +238,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 frame_buffer[i] = ppu_buffer[i];
                             }
                         }
+
+                        // 每幀更新計數
                         frames += 1;
+
+                        // 每10幀輸出一次VRAM內容檢查
+                        if frames % 10 == 0 {
+                            println!("#### VRAM 內容檢查 - 幀 {} ####", frames);
+                            println!(
+                                "  非零字節數: {}/{} ({:.1}%)",
+                                ppu.vram.iter().filter(|&&b| b != 0).count(),
+                                ppu.vram.len(),
+                                100.0 * ppu.vram.iter().filter(|&&b| b != 0).count() as f32
+                                    / ppu.vram.len() as f32
+                            );
+                        }
 
                         // 定期輸出診斷資訊
                         if frames % 60 == 0 {
