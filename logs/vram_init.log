@@ -1,0 +1,10 @@
+VRAM initialized from ROM
+Tile 0 data: [2F, 2F, 2F, 7B, 30, 31, 31, 31, 31, 31, 32, 2A, 7C, 2F, 2F, 2F]
+Tile 1 data: [2F, 2F, 2F, 2F, 2F, 2F, 2F, 7C, 36, 15, 0E, 1F, 0E, 15, 37, 2A]
+Background map [0..8]: [01, 02, 03, 00, 01, 02, 03, 00]
+Graphics found in ROM: true
+VRAM initialized from ROM
+Tile 0 data: [2F, 2F, 2F, 7B, 30, 31, 31, 31, 31, 31, 32, 2A, 7C, 2F, 2F, 2F]
+Tile 1 data: [2F, 2F, 2F, 2F, 2F, 2F, 2F, 7C, 36, 15, 0E, 1F, 0E, 15, 37, 2A]
+Background map [0..8]: [01, 02, 03, 00, 01, 02, 03, 00]
+Graphics found in ROM: true

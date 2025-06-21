@@ -1,0 +1,122 @@
+CPU 初始化完成
+IE=0x01 (VBlank 已啟用)
+LCDC=0x91 (LCD 開啟)
+CPU 初始化完成
+IE=0x01 (VBlank 已啟用)
+LCDC=0x91 (LCD 開啟)
+CPU 初始化完成
+IE=0x01 (VBlank 已啟用)
+LCDC=0x91 (LCD 開啟)
+CPU 初始化完成
+IE=0x01 (VBlank 已啟用)
+LCDC=0x91 (LCD 開啟)
+
+=== CPU 初始化 (2025-06-20 23:29:52.113018700 +08:00) ===
+AF = 0x01B0 (A=01, F=B0)
+  旗標: Z=true, N=false, H=true, C=true
+BC = 0x0013
+DE = 0x00D8
+HL = 0x014D
+SP = 0xFFFE
+PC = 0x0100
+IME = false
+
+=== CPU 初始化 (2025-06-20 23:30:03.603959500 +08:00) ===
+AF = 0x01B0 (A=01, F=B0)
+  旗標: Z=true, N=false, H=true, C=true
+BC = 0x0013
+DE = 0x00D8
+HL = 0x014D
+SP = 0xFFFE
+PC = 0x0100
+IME = false
+
+=== CPU 初始化 (2025-06-20 23:36:43.146344800 +08:00) ===
+AF = 0x01B0 (A=01, F=B0)
+  旗標: Z=true, N=false, H=true, C=true
+BC = 0x0013
+DE = 0x00D8
+HL = 0x014D
+SP = 0xFFFE
+PC = 0x0100
+IME = false
+
+=== CPU 初始化 (2025-06-20 23:37:08.638938600 +08:00) ===
+AF = 0x01B0 (A=01, F=B0)
+  旗標: Z=true, N=false, H=true, C=true
+BC = 0x0013
+DE = 0x00D8
+HL = 0x014D
+SP = 0xFFFE
+PC = 0x0100
+IME = false
+
+=== CPU 初始化 (2025-06-20 23:39:02.118387900 +08:00) ===
+AF = 0x01B0 (A=01, F=B0)
+  旗標: Z=true, N=false, H=true, C=true
+BC = 0x0013
+DE = 0x00D8
+HL = 0x014D
+SP = 0xFFFE
+PC = 0x0100
+IME = false
+
+=== CPU 初始化 (2025-06-20 23:40:09.641206900 +08:00) ===
+AF = 0x01B0 (A=01, F=B0)
+  旗標: Z=true, N=false, H=true, C=true
+BC = 0x0013
+DE = 0x00D8
+HL = 0x014D
+SP = 0xFFFE
+PC = 0x0100
+IME = false
+
+=== CPU 初始化 (2025-06-20 23:46:27.841690 +08:00) ===
+AF = 0x01B0 (A=01, F=B0)
+  旗標: Z=true, N=false, H=true, C=true
+BC = 0x0013
+DE = 0x00D8
+HL = 0x014D
+SP = 0xFFFE
+PC = 0x0100
+IME = false
+
+=== CPU 初始化 (2025-06-20 23:59:45.988399400 +08:00) ===
+AF = 0x01B0 (A=01, F=B0)
+  旗標: Z=true, N=false, H=true, C=true
+BC = 0x0013
+DE = 0x00D8
+HL = 0x014D
+SP = 0xFFFE
+PC = 0x0100
+IME = false
+
+=== CPU 初始化 (2025-06-21 00:02:21.425053200 +08:00) ===
+AF = 0x01B0 (A=01, F=B0)
+  旗標: Z=true, N=false, H=true, C=true
+BC = 0x0013
+DE = 0x00D8
+HL = 0x014D
+SP = 0xFFFE
+PC = 0x0100
+IME = false
+
+=== CPU 初始化 (2025-06-21 00:02:48.261121600 +08:00) ===
+AF = 0x01B0 (A=01, F=B0)
+  旗標: Z=true, N=false, H=true, C=true
+BC = 0x0013
+DE = 0x00D8
+HL = 0x014D
+SP = 0xFFFE
+PC = 0x0100
+IME = false
+
+=== CPU 初始化 (2025-06-21 00:05:19.474240400 +08:00) ===
+AF = 0x01B0 (A=01, F=B0)
+  旗標: Z=true, N=false, H=true, C=true
+BC = 0x0013
+DE = 0x00D8
+HL = 0x014D
+SP = 0xFFFE
+PC = 0x0100
+IME = false
